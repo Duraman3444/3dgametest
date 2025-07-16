@@ -237,7 +237,7 @@ function addSurfaceToPhysics(surface) {
         physicsWorld.surfaces.push(surface);
         // Reduced logging to prevent console spam
         if (physicsWorld.surfaces.length % 10 === 0) {
-            console.log(`Added surface to physics world. Total surfaces: ${physicsWorld.surfaces.length}`);
+        console.log(`Added surface to physics world. Total surfaces: ${physicsWorld.surfaces.length}`);
         }
     }
 }
@@ -416,34 +416,14 @@ function checkGroundCollision() {
         }
         
         if (shouldBeGrounded) {
-            // Ensure ball never sinks into tiles - aggressive positioning correction
+            // Extremely gentle ground positioning to prevent any oscillation
             const currentY = playerPhysics.position.y;
             const targetY = groundY;
+            const snapStrength = 0.03; // Extremely gentle snapping
             
-            // For normal world, ensure ball is never below the surface
-            if (!invertedWorld.isActive) {
-                const minAllowedY = bestIntersection.point.y + PHYSICS_CONFIG.playerRadius;
-                if (currentY < minAllowedY) {
-                    // Ball is sinking - force it to proper position immediately
-                    playerPhysics.position.y = minAllowedY;
-                    console.log(`🔧 Ball was sinking (Y: ${currentY.toFixed(3)}) - corrected to Y: ${minAllowedY.toFixed(3)}`);
-                } else if (!playerPhysics.isJumping && Math.abs(currentY - targetY) > 0.02) {
-                    // Gentle adjustment for normal positioning
-                    const snapStrength = 0.1; // More responsive snapping
-                    playerPhysics.position.y = THREE.MathUtils.lerp(currentY, targetY, snapStrength);
-                }
-            } else {
-                // For inverted world, ensure ball is never above the surface
-                const maxAllowedY = bestIntersection.point.y - PHYSICS_CONFIG.playerRadius;
-                if (currentY > maxAllowedY) {
-                    // Ball is sinking upward - force it to proper position immediately
-                    playerPhysics.position.y = maxAllowedY;
-                    console.log(`🔧 Ball was sinking upward (Y: ${currentY.toFixed(3)}) - corrected to Y: ${maxAllowedY.toFixed(3)}`);
-                } else if (!playerPhysics.isJumping && Math.abs(currentY - targetY) > 0.02) {
-                    // Gentle adjustment for normal positioning
-                    const snapStrength = 0.1; // More responsive snapping
-                    playerPhysics.position.y = THREE.MathUtils.lerp(currentY, targetY, snapStrength);
-                }
+            // Only snap if not jumping and position difference is very significant
+            if (!playerPhysics.isJumping && Math.abs(currentY - targetY) > 0.1) {
+                playerPhysics.position.y = THREE.MathUtils.lerp(currentY, targetY, snapStrength);
             }
             
             // Update ground state
@@ -535,15 +515,15 @@ function preventVerticalVelocityAccumulation() {
     
     // Minimal acceleration management when grounded (unless actively jumping)
     if (!playerPhysics.isJumping) {
-        const shouldClampAcceleration = invertedWorld.isActive ? 
+    const shouldClampAcceleration = invertedWorld.isActive ? 
             (playerPhysics.acceleration.y < -accelerationTolerance || playerPhysics.acceleration.y > accelerationTolerance) : 
             (playerPhysics.acceleration.y > accelerationTolerance || playerPhysics.acceleration.y < -accelerationTolerance);
-        
-        if (shouldClampAcceleration) {
+    
+    if (shouldClampAcceleration) {
             // Very gentle acceleration modification
-            if (invertedWorld.isActive) {
+        if (invertedWorld.isActive) {
                 playerPhysics.acceleration.y = Math.max(playerPhysics.acceleration.y * 0.9, -0.2);
-            } else {
+        } else {
                 playerPhysics.acceleration.y = Math.min(playerPhysics.acceleration.y * 0.9, -0.2);
             }
         }
@@ -1029,9 +1009,9 @@ function updatePhysicsMovement() {
     if (playerPhysics.isGrounded) {
         // Disabled surface contact system to prevent vibration
         // ensureSurfaceContact(); // Commented out
-        
-        // Prevent vertical velocity accumulation when grounded (anti-bouncing)
-        preventVerticalVelocityAccumulation();
+    
+    // Prevent vertical velocity accumulation when grounded (anti-bouncing)
+    preventVerticalVelocityAccumulation();
     }
     
     // Update visual player position with stability enforcement
@@ -1135,7 +1115,7 @@ function findSafeGroundPosition(currentPosition) {
         
         // Only use positions that are reasonable (not too far down)
         if (distance <= maxRayDistance) {
-            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius + 0.1;
             return new THREE.Vector3(currentPosition.x, safeY, currentPosition.z);
         }
     }
@@ -1483,9 +1463,8 @@ function validateAndResetGrounding() {
                 console.log(`   - Distance to ground: ${distance.toFixed(3)}`);
                 console.log(`   - Player Y: ${playerPhysics.position.y.toFixed(3)}, Ground Y: ${groundY.toFixed(3)}`);
                 
-                // Reset to grounded state with proper positioning
-                const properGroundY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
-                playerPhysics.position.y = properGroundY;
+                // Reset to grounded state
+                playerPhysics.position.y = groundY;
                 playerPhysics.isGrounded = true;
                 playerPhysics.canJump = true;
                 playerPhysics.lastGroundNormal.copy(intersection.face.normal);
@@ -1776,7 +1755,7 @@ function findSafeInvertedSpawnPosition(basePosition) {
         
         if (distance <= maxRayDistance) {
             // Place player on the inverted surface (above it since gravity points up)
-            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius + 0.1;
             const safePosition = new THREE.Vector3(basePosition.x, safeY, basePosition.z);
             
             console.log(`✅ Found safe inverted spawn at Y: ${safeY.toFixed(2)}`);
@@ -1806,7 +1785,7 @@ function findSafeNormalSpawnPosition(basePosition) {
         
         if (distance <= maxRayDistance) {
             // Place player on the normal surface (above it since gravity points down)
-            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius + 0.1;
             const safePosition = new THREE.Vector3(basePosition.x, safeY, basePosition.z);
             
             console.log(`✅ Found safe normal spawn at Y: ${safeY.toFixed(2)}`);
@@ -2552,33 +2531,13 @@ function testPhysicsStability() {
     showMessage('🔧 Physics stability test completed!', '#00ffff', 3000);
 }
 
-// Position stability enforcement system with anti-sinking protection
+// Position stability enforcement system
 function enforcePositionStability() {
     // Only enforce stability when grounded and not moving much
     if (!playerPhysics.isGrounded) return;
     
     const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
     const verticalSpeed = Math.abs(playerPhysics.velocity.y);
-    
-    // First, check if ball is sinking and fix it immediately
-    const rayOrigin = playerPhysics.position.clone();
-    const rayDirection = new THREE.Vector3(0, -1, 0);
-    physicsWorld.raycaster.set(rayOrigin, rayDirection);
-    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
-    
-    if (intersects.length > 0) {
-        const intersection = intersects[0];
-        const surfaceY = intersection.point.y;
-        const currentY = playerPhysics.position.y;
-        const minAllowedY = surfaceY + PHYSICS_CONFIG.playerRadius;
-        
-        // Prevent ball from sinking below the surface
-        if (currentY < minAllowedY) {
-            playerPhysics.position.y = minAllowedY;
-            player.position.copy(playerPhysics.position);
-            playerPhysics.velocity.y = 0; // Stop vertical movement
-        }
-    }
     
     // If player is mostly stationary, prevent any micro-movements
     if (horizontalSpeed < 0.1 && verticalSpeed < 0.1) {
@@ -2611,7 +2570,7 @@ function enforcePositionStability() {
     }
 }
 
-// Emergency stability fix function with proper ball positioning
+// Emergency stability fix function
 function fixPhysicsStability() {
     console.log('🔧 APPLYING EMERGENCY STABILITY FIX...');
     
@@ -2628,9 +2587,9 @@ function fixPhysicsStability() {
         const distance = intersection.distance;
         
         if (distance < maxDistance) {
-            // Force player to correct position ON TOP of the surface
-            const properGroundY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
-            playerPhysics.position.y = properGroundY;
+            // Force player to ground
+            const groundY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+            playerPhysics.position.y = groundY;
             player.position.copy(playerPhysics.position);
             
             // Reset physics state
@@ -2640,54 +2599,9 @@ function fixPhysicsStability() {
             playerPhysics.canJump = true;
             playerPhysics.groundDistance = distance;
             
-            console.log(`✅ Player stabilized at Y: ${properGroundY.toFixed(2)} (surface at Y: ${intersection.point.y.toFixed(2)})`);
-            showMessage('🔧 Physics stabilized - ball positioned correctly!', '#00ff00', 2000);
+            console.log(`✅ Player stabilized at Y: ${groundY.toFixed(2)}`);
+            showMessage('🔧 Physics stabilized!', '#00ff00', 2000);
         }
-    }
-}
-
-// Fix ball sinking into tiles
-function fixBallSinking() {
-    console.log('🔧 FIXING BALL SINKING INTO TILES...');
-    
-    const rayOrigin = playerPhysics.position.clone();
-    const rayDirection = new THREE.Vector3(0, -1, 0);
-    const maxDistance = 1.0; // Check within 1 unit below
-    
-    physicsWorld.raycaster.set(rayOrigin, rayDirection);
-    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
-    
-    if (intersects.length > 0) {
-        const intersection = intersects[0];
-        const surfaceY = intersection.point.y;
-        const currentY = playerPhysics.position.y;
-        const correctY = surfaceY + PHYSICS_CONFIG.playerRadius;
-        
-        console.log(`📊 Surface Y: ${surfaceY.toFixed(3)}`);
-        console.log(`📊 Current ball Y: ${currentY.toFixed(3)}`);
-        console.log(`📊 Correct ball Y: ${correctY.toFixed(3)}`);
-        
-        if (currentY < correctY) {
-            console.log(`🔧 Ball is sinking! Moving from Y: ${currentY.toFixed(3)} to Y: ${correctY.toFixed(3)}`);
-            
-            // Fix the position immediately
-            playerPhysics.position.y = correctY;
-            player.position.copy(playerPhysics.position);
-            
-            // Reset physics state
-            playerPhysics.velocity.set(0, 0, 0);
-            playerPhysics.acceleration.set(0, 0, 0);
-            playerPhysics.isGrounded = true;
-            playerPhysics.canJump = true;
-            
-            showMessage('🔧 Ball position fixed - no more sinking!', '#00ff00', 2000);
-        } else {
-            console.log('✅ Ball is positioned correctly');
-            showMessage('✅ Ball position is correct', '#00ff00', 1000);
-        }
-    } else {
-        console.log('❌ No surface found below ball');
-        showMessage('❌ No surface found below ball', '#ff0000', 2000);
     }
 }
 
@@ -2749,7 +2663,6 @@ window.testRollingPhysics = testRollingPhysics;
 window.testPhysicsStability = testPhysicsStability;
 window.fixPhysicsStability = fixPhysicsStability;
 window.testStabilityIssues = testStabilityIssues;
-window.fixBallSinking = fixBallSinking;
 
 // Enhanced jump handling - SPACEBAR-ONLY, GROUNDED-ONLY jumping for realistic physics
 // NOTE: This function is completely camera-independent and works identically in all camera modes
