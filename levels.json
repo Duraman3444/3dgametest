@@ -32,8 +32,8 @@
             { "type": "bouncingPlatform", "x": 2, "z": 6 },
             { "type": "bouncingPlatform", "x": 8, "z": 5 },
             { "type": "bouncingPlatform", "x": 6, "z": 8 },
-            { "type": "key", "x": 10, "z": 10 },
-            { "type": "goal", "x": 11, "z": 11 }
+            { "type": "key", "x": 9, "z": 9 },
+            { "type": "goal", "x": 10, "z": 10 }
         ]
     },
     {
@@ -53,8 +53,8 @@
             { "type": "spikeTrap", "x": 8, "z": 8 },
             { "type": "spikeTrap", "x": 9, "z": 4 },
             { "type": "spikeTrap", "x": 4, "z": 9 },
-            { "type": "key", "x": 12, "z": 12 },
-            { "type": "goal", "x": 13, "z": 13 }
+            { "type": "key", "x": 11, "z": 11 },
+            { "type": "goal", "x": 12, "z": 12 }
         ]
     },
     {
@@ -74,8 +74,8 @@
             { "type": "hole", "x": 9, "z": 9 },
             { "type": "hole", "x": 11, "z": 4 },
             { "type": "hole", "x": 4, "z": 11 },
-            { "type": "key", "x": 14, "z": 14 },
-            { "type": "goal", "x": 15, "z": 15 }
+            { "type": "key", "x": 13, "z": 13 },
+            { "type": "goal", "x": 14, "z": 14 }
         ],
         "underworld": {
             "playerStart": { "x": 8, "z": 8 },
@@ -109,8 +109,8 @@
             { "type": "hole", "x": 10, "z": 5 },
             { "type": "hole", "x": 13, "z": 10 },
             { "type": "hole", "x": 5, "z": 13 },
-            { "type": "key", "x": 16, "z": 16 },
-            { "type": "goal", "x": 17, "z": 17 }
+            { "type": "key", "x": 15, "z": 15 },
+            { "type": "goal", "x": 16, "z": 16 }
         ],
         "underworld": {
             "playerStart": { "x": 9, "z": 9 },
@@ -284,7 +284,7 @@
             { "type": "coin", "position": { "x": 15, "y": 8, "z": 7 } },
             { "type": "coin", "position": { "x": 11, "y": 8, "z": 11 } },
             { "type": "key", "position": { "x": 19, "y": 1, "z": 19 } },
-            { "type": "goal", "position": { "x": 21, "y": 1, "z": 21 } }
+            { "type": "goal", "position": { "x": 20, "y": 1, "z": 20 } }
         ]
     }
 ] 
