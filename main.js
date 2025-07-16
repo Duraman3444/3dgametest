@@ -355,6 +355,9 @@ function resetPlayerPhysics() {
     playerPhysics.inputMagnitude = 0;
     playerPhysics.precisionMode = false;
     
+    // Reset stability system
+    playerPhysics.stablePosition = null;
+    
     // Update visual player position
     player.position.copy(playerPhysics.position);
     player.rotation.set(0, 0, 0);
@@ -402,9 +405,9 @@ function checkGroundCollision() {
         const groundOffset = PHYSICS_CONFIG.playerRadius * (invertedWorld.isActive ? -1 : 1);
         const groundY = bestIntersection.point.y + groundOffset;
         
-        // Improved grounding check with better tolerance to prevent getting stuck
+        // Improved grounding check with stable tolerance
         let shouldBeGrounded = false;
-        const groundTolerance = PHYSICS_CONFIG.surfaceSnapDistance * 3; // More forgiving tolerance
+        const groundTolerance = PHYSICS_CONFIG.surfaceSnapDistance * 2; // Stable tolerance
         
         if (invertedWorld.isActive) {
             shouldBeGrounded = playerPhysics.position.y >= groundY - groundTolerance;
@@ -413,13 +416,13 @@ function checkGroundCollision() {
         }
         
         if (shouldBeGrounded) {
-            // Gentle ground positioning to prevent ball getting stuck in tiles
+            // Extremely gentle ground positioning to prevent any oscillation
             const currentY = playerPhysics.position.y;
             const targetY = groundY;
-            const snapStrength = 0.1; // Much gentler snapping
+            const snapStrength = 0.03; // Extremely gentle snapping
             
-            // Only snap if not jumping and position difference is significant
-            if (!playerPhysics.isJumping && Math.abs(currentY - targetY) > 0.05) {
+            // Only snap if not jumping and position difference is very significant
+            if (!playerPhysics.isJumping && Math.abs(currentY - targetY) > 0.1) {
                 playerPhysics.position.y = THREE.MathUtils.lerp(currentY, targetY, snapStrength);
             }
             
@@ -440,24 +443,24 @@ function checkGroundCollision() {
                 playerPhysics.isJumping = false;
             }
             
-            // Comprehensive vertical velocity reset for grounded state
-            const velocityTolerance = 0.1; // Small tolerance for micro-movements
+            // Gentle vertical velocity control for grounded state
+            const velocityTolerance = 0.2; // Larger tolerance for stability
             const shouldResetVelocity = invertedWorld.isActive ? 
                 playerPhysics.velocity.y > velocityTolerance : 
                 playerPhysics.velocity.y < -velocityTolerance;
             
             if (shouldResetVelocity) {
-                // Stop vertical movement completely when grounded
-                playerPhysics.velocity.y = 0;
+                // Gently reduce vertical movement when grounded
+                playerPhysics.velocity.y *= 0.5;
                 
-                // Also reset any residual acceleration in the vertical direction
+                // Gentle acceleration reset
                 if (invertedWorld.isActive) {
-                    if (playerPhysics.acceleration.y < 0) {
-                        playerPhysics.acceleration.y = 0;
+                    if (playerPhysics.acceleration.y < -0.2) {
+                        playerPhysics.acceleration.y *= 0.7;
                     }
                 } else {
-                    if (playerPhysics.acceleration.y > 0) {
-                        playerPhysics.acceleration.y = 0;
+                    if (playerPhysics.acceleration.y > 0.2) {
+                        playerPhysics.acceleration.y *= 0.7;
                     }
                 }
             }
@@ -487,80 +490,41 @@ function checkGroundCollision() {
     checkFallRecovery();
 }
 
-// Gentle surface contact system to prevent hovering without causing vibration
+// Completely disabled surface contact system to eliminate all vibration
 function ensureSurfaceContact() {
-    if (!playerPhysics.isGrounded) return;
-    
-    // Only apply surface contact when player is moving to prevent static vibration
-    const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
-    if (horizontalSpeed < 0.1) return; // Skip when stationary to prevent vibration
-    
-    // Additional ground check to ensure continuous contact
-    const rayOrigin = playerPhysics.position.clone();
-    const rayDirection = worldState.gravityDirection.clone().multiplyScalar(-1);
-    const contactDistance = PHYSICS_CONFIG.playerRadius + 0.1; // More forgiving contact distance
-    
-    physicsWorld.raycaster.set(rayOrigin, rayDirection);
-    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
-    
-    if (intersects.length > 0) {
-        const intersection = intersects[0];
-        const distance = intersection.distance;
-        
-        // Only apply gentle corrections when significantly off-surface
-        if (distance > contactDistance && distance < contactDistance * 2) {
-            const groundOffset = PHYSICS_CONFIG.playerRadius * (invertedWorld.isActive ? -1 : 1);
-            const targetY = intersection.point.y + groundOffset;
-            
-            // Gentle surface adhesion when not jumping
-            if (!playerPhysics.isJumping) {
-                const adhesionStrength = 0.05; // Much gentler adhesion
-                playerPhysics.position.y = THREE.MathUtils.lerp(playerPhysics.position.y, targetY, adhesionStrength);
-                
-                // Only clamp velocity if significantly wrong
-                const velocityTolerance = 0.1; // More forgiving tolerance
-                const shouldClampVelocity = invertedWorld.isActive ? 
-                    Math.abs(playerPhysics.velocity.y) > velocityTolerance : 
-                    Math.abs(playerPhysics.velocity.y) > velocityTolerance;
-                
-                if (shouldClampVelocity) {
-                    playerPhysics.velocity.y *= 0.5; // Dampen instead of zeroing
-                }
-            }
-        }
-    }
+    // Disabled to prevent any physics instability
+    return;
 }
 
-// Balanced anti-bouncing system that prevents floating without causing vibration
+// Minimal anti-bouncing system that only prevents extreme issues
 function preventVerticalVelocityAccumulation() {
     if (!playerPhysics.isGrounded) return;
     
-    const velocityTolerance = 0.1; // More forgiving tolerance to prevent vibration
-    const accelerationTolerance = 0.2; // More forgiving tolerance for acceleration
+    const velocityTolerance = 0.3; // Very forgiving tolerance
+    const accelerationTolerance = 0.5; // Very forgiving tolerance for acceleration
     
-    // Only clamp velocity when significantly wrong and not jumping
+    // Only clamp velocity when extremely wrong and not jumping
     const shouldClampVelocity = invertedWorld.isActive ? 
         (playerPhysics.velocity.y > velocityTolerance || playerPhysics.velocity.y < -velocityTolerance) : 
         (playerPhysics.velocity.y < -velocityTolerance || playerPhysics.velocity.y > velocityTolerance);
     
     if (shouldClampVelocity && !playerPhysics.isJumping) {
-        // Dampen instead of zeroing to prevent sudden changes
-        playerPhysics.velocity.y *= 0.3;
+        // Very gentle dampening to prevent sudden changes
+        playerPhysics.velocity.y *= 0.8;
     }
     
-    // Gentle acceleration management when grounded (unless actively jumping)
+    // Minimal acceleration management when grounded (unless actively jumping)
     if (!playerPhysics.isJumping) {
         const shouldClampAcceleration = invertedWorld.isActive ? 
             (playerPhysics.acceleration.y < -accelerationTolerance || playerPhysics.acceleration.y > accelerationTolerance) : 
             (playerPhysics.acceleration.y > accelerationTolerance || playerPhysics.acceleration.y < -accelerationTolerance);
         
         if (shouldClampAcceleration) {
-            // Gentle pull toward ground instead of forced acceleration
-            const groundAdhesionAcceleration = 0.1;
+            // Very gentle acceleration modification
             if (invertedWorld.isActive) {
-                playerPhysics.acceleration.y = Math.max(playerPhysics.acceleration.y * 0.5, -groundAdhesionAcceleration);
+                playerPhysics.acceleration.y = Math.max(playerPhysics.acceleration.y * 0.9, -0.2);
             } else {
-                playerPhysics.acceleration.y = Math.min(playerPhysics.acceleration.y * 0.5, -groundAdhesionAcceleration);
+                playerPhysics.acceleration.y = Math.min(playerPhysics.acceleration.y * 0.9, -0.2);
             }
         }
     }
@@ -1041,20 +1005,20 @@ function updatePhysicsMovement() {
     // Update rolling animation
     updateRollingAnimation();
     
-    // Apply stability optimizations only when needed
+    // Apply minimal stability optimizations only when needed
     if (playerPhysics.isGrounded) {
-        // Only apply surface contact when moving to prevent static vibration
-        const isMoving = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2) > 0.05;
-        if (isMoving) {
-            ensureSurfaceContact();
-        }
+        // Disabled surface contact system to prevent vibration
+        // ensureSurfaceContact(); // Commented out
         
         // Prevent vertical velocity accumulation when grounded (anti-bouncing)
         preventVerticalVelocityAccumulation();
     }
     
-    // Update visual player position (always sync with physics)
+    // Update visual player position with stability enforcement
     player.position.copy(playerPhysics.position);
+    
+    // Force position stability when stationary to prevent vibration
+    enforcePositionStability();
     
     // Update legacy grid position for backwards compatibility
     const worldPos = player.position;
@@ -2567,10 +2531,138 @@ function testPhysicsStability() {
     showMessage('🔧 Physics stability test completed!', '#00ffff', 3000);
 }
 
+// Position stability enforcement system
+function enforcePositionStability() {
+    // Only enforce stability when grounded and not moving much
+    if (!playerPhysics.isGrounded) return;
+    
+    const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+    const verticalSpeed = Math.abs(playerPhysics.velocity.y);
+    
+    // If player is mostly stationary, prevent any micro-movements
+    if (horizontalSpeed < 0.1 && verticalSpeed < 0.1) {
+        // Store the stable position
+        if (!playerPhysics.stablePosition) {
+            playerPhysics.stablePosition = playerPhysics.position.clone();
+        }
+        
+        // Check if position has changed significantly from stable position
+        const positionDrift = playerPhysics.position.distanceTo(playerPhysics.stablePosition);
+        
+        if (positionDrift > 0.02) { // Allow small movement tolerance
+            // Snap back to stable position
+            playerPhysics.position.copy(playerPhysics.stablePosition);
+            player.position.copy(playerPhysics.position);
+            
+            // Zero out any micro-velocities
+            if (Math.abs(playerPhysics.velocity.x) < 0.1) playerPhysics.velocity.x = 0;
+            if (Math.abs(playerPhysics.velocity.y) < 0.1) playerPhysics.velocity.y = 0;
+            if (Math.abs(playerPhysics.velocity.z) < 0.1) playerPhysics.velocity.z = 0;
+            
+            // Zero out any micro-accelerations
+            if (Math.abs(playerPhysics.acceleration.x) < 0.1) playerPhysics.acceleration.x = 0;
+            if (Math.abs(playerPhysics.acceleration.y) < 0.1) playerPhysics.acceleration.y = 0;
+            if (Math.abs(playerPhysics.acceleration.z) < 0.1) playerPhysics.acceleration.z = 0;
+        }
+    } else {
+        // Clear stable position when moving
+        playerPhysics.stablePosition = null;
+    }
+}
+
+// Emergency stability fix function
+function fixPhysicsStability() {
+    console.log('🔧 APPLYING EMERGENCY STABILITY FIX...');
+    
+    // Force player to be grounded if they're close to a surface
+    const rayOrigin = playerPhysics.position.clone();
+    const rayDirection = new THREE.Vector3(0, -1, 0);
+    const maxDistance = 2.0; // Check within 2 units below
+    
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
+    
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const distance = intersection.distance;
+        
+        if (distance < maxDistance) {
+            // Force player to ground
+            const groundY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+            playerPhysics.position.y = groundY;
+            player.position.copy(playerPhysics.position);
+            
+            // Reset physics state
+            playerPhysics.velocity.set(0, 0, 0);
+            playerPhysics.acceleration.set(0, 0, 0);
+            playerPhysics.isGrounded = true;
+            playerPhysics.canJump = true;
+            playerPhysics.groundDistance = distance;
+            
+            console.log(`✅ Player stabilized at Y: ${groundY.toFixed(2)}`);
+            showMessage('🔧 Physics stabilized!', '#00ff00', 2000);
+        }
+    }
+}
+
+// Test for stability issues
+function testStabilityIssues() {
+    console.log('🔍 TESTING FOR STABILITY ISSUES...');
+    
+    // Test 1: Check for excessive velocity
+    const totalVelocity = Math.sqrt(
+        playerPhysics.velocity.x ** 2 + 
+        playerPhysics.velocity.y ** 2 + 
+        playerPhysics.velocity.z ** 2
+    );
+    
+    console.log(`📊 Total velocity: ${totalVelocity.toFixed(4)}`);
+    
+    if (totalVelocity > 0.1 && playerPhysics.isGrounded) {
+        console.log('⚠️  Excessive velocity detected for grounded player');
+    }
+    
+    // Test 2: Check for position oscillation
+    const positions = [];
+    for (let i = 0; i < 10; i++) {
+        positions.push(playerPhysics.position.y);
+        // Simulate a few physics updates
+        preventVerticalVelocityAccumulation();
+    }
+    
+    const maxY = Math.max(...positions);
+    const minY = Math.min(...positions);
+    const oscillation = maxY - minY;
+    
+    console.log(`📊 Position oscillation: ${oscillation.toFixed(6)}`);
+    
+    if (oscillation > 0.01) {
+        console.log('⚠️  Position oscillation detected');
+        fixPhysicsStability();
+    }
+    
+    // Test 3: Check grounding consistency
+    const groundingTests = [];
+    for (let i = 0; i < 5; i++) {
+        checkGroundCollision();
+        groundingTests.push(playerPhysics.isGrounded);
+    }
+    
+    const consistentGrounding = groundingTests.every(test => test === groundingTests[0]);
+    console.log(`📊 Grounding consistency: ${consistentGrounding ? 'PASS' : 'FAIL'}`);
+    
+    if (!consistentGrounding) {
+        console.log('⚠️  Grounding inconsistency detected');
+        fixPhysicsStability();
+    }
+}
+
 // Make test functions globally accessible
 window.testGameplayImprovements = testGameplayImprovements;
 window.testRollingPhysics = testRollingPhysics;
 window.testPhysicsStability = testPhysicsStability;
+window.fixPhysicsStability = fixPhysicsStability;
+window.testStabilityIssues = testStabilityIssues;
 
 // Enhanced jump handling - SPACEBAR-ONLY, GROUNDED-ONLY jumping for realistic physics
 // NOTE: This function is completely camera-independent and works identically in all camera modes
@@ -3295,16 +3387,29 @@ function animateCoins() {
     });
 }
 
-// Function to check coin collection
+// Enhanced coin collection system that works even with physics instability
 function checkCoinCollection() {
     const playerPos = player.position;
-    const collectDistance = getConfigValue('physics.collisionDistance', 0.8);
+    const collectDistance = getConfigValue('physics.collisionDistance', 0.8) * 1.5; // Larger collection radius
     
     for (let i = coins.length - 1; i >= 0; i--) {
         const coin = coins[i];
-        const distance = playerPos.distanceTo(coin.position);
         
-        if (distance < collectDistance) {
+        // Use both visual player position and physics position for collection
+        const visualDistance = playerPos.distanceTo(coin.position);
+        const physicsDistance = playerPhysics.position.distanceTo(coin.position);
+        
+        // Use the smaller distance for more forgiving collection
+        const distance = Math.min(visualDistance, physicsDistance);
+        
+        // Also check horizontal distance separately (for hovering cases)
+        const horizontalDistance = Math.sqrt(
+            Math.pow(playerPos.x - coin.position.x, 2) + 
+            Math.pow(playerPos.z - coin.position.z, 2)
+        );
+        
+        // Collect coin if either 3D distance is good OR horizontal distance is very close
+        if (distance < collectDistance || horizontalDistance < collectDistance * 0.6) {
             collectCoin(coin);
         }
     }
