@@ -1,0 +1,86 @@
+{
+  "gameplay": {
+    "tileSize": 3,
+    "gridSize": 12,
+    "moveDuration": 0.5,
+    "rotationDuration": 2000,
+    "gravityShiftSpeed": 2.0,
+    "maxLives": 5,
+    "bounceDuration": 2.0,
+    "bounceHeight": 6
+  },
+  "camera": {
+    "smoothness": 0.2,
+    "fov": 60,
+    "near": 0.1,
+    "far": 1000,
+    "defaultOffset": {
+      "x": 0,
+      "y": 6,
+      "z": 8
+    },
+    "defaultTarget": {
+      "x": 0,
+      "y": 1,
+      "z": 0
+    }
+  },
+  "physics": {
+    "collisionDistance": 1.0,
+    "teleportDistance": 0.9,
+    "trapDistance": 0.8,
+    "platformDistance": 0.6
+  },
+  "visual": {
+    "animationSpeed": 3,
+    "particleCount": 50,
+    "particleSize": 0.2,
+    "shadowMapSize": 4096,
+    "wallHeight": 0.8,
+    "wallThickness": 0.2,
+    "coinFloatHeight": 0.2,
+    "coinFloatSpeed": 3,
+    "keyFloatHeight": 0.25,
+    "keyFloatSpeed": 4,
+    "goalPulseSpeed": 8,
+    "goalPulseAmount": 0.15
+  },
+  "audio": {
+    "masterVolume": 0.8,
+    "sfxVolume": 0.9,
+    "musicVolume": 0.6,
+    "soundEnabled": true,
+    "musicEnabled": true
+  },
+  "multiplayer": {
+    "updateThrottle": 30,
+    "maxReconnectAttempts": 10,
+    "reconnectDelay": 1500,
+    "maxPlayers": 12,
+    "minPlayers": 2,
+    "votingTimeout": 45000,
+    "countdownDuration": 3000
+  },
+  "ui": {
+    "messageDisplayDuration": 3000,
+    "hudUpdateInterval": 50,
+    "animationDuration": 500,
+    "transitionDuration": 800,
+    "achievementAnimationDelay": 0.15,
+    "victoryScreenDelay": 1000
+  },
+  "performance": {
+    "maxParticles": 200,
+    "particleLifetime": 3000,
+    "shadowQuality": "high",
+    "antialiasing": true,
+    "enableShadows": true,
+    "renderDistance": 100
+  },
+  "debug": {
+    "showFPS": true,
+    "showDebugInfo": true,
+    "logLevel": "debug",
+    "enableConsoleCommands": true
+  }
+} 

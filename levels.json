@@ -1,0 +1,81 @@
+[
+    {
+        "name": "Tutorial",
+        "number": 1,
+        "gridSize": 10,
+        "playerStart": { "x": 1, "z": 1 },
+        "tiles": "auto",
+        "objects": [
+            { "type": "coin", "x": 3, "z": 3 },
+            { "type": "coin", "x": 5, "z": 5 },
+            { "type": "coin", "x": 7, "z": 7 },
+            { "type": "key", "x": 8, "z": 8 },
+            { "type": "goal", "x": 9, "z": 9 }
+        ]
+    },
+    {
+        "name": "The Maze",
+        "number": 2,
+        "gridSize": 10,
+        "playerStart": { "x": 0, "z": 0 },
+        "tiles": "auto",
+        "objects": [
+            { "type": "coin", "x": 2, "z": 2 },
+            { "type": "coin", "x": 4, "z": 6 },
+            { "type": "coin", "x": 6, "z": 4 },
+            { "type": "coin", "x": 8, "z": 2 },
+            { "type": "spikeTrap", "x": 3, "z": 3 },
+            { "type": "spikeTrap", "x": 5, "z": 5 },
+            { "type": "teleporter", "x": 2, "z": 8, "pairId": 1, "destination": { "x": 8, "z": 8 } },
+            { "type": "teleporter", "x": 8, "z": 8, "pairId": 1, "destination": { "x": 2, "z": 8 } },
+            { "type": "key", "x": 7, "z": 7 },
+            { "type": "goal", "x": 9, "z": 9 }
+        ]
+    },
+    {
+        "name": "Platform Challenge",
+        "number": 3,
+        "gridSize": 10,
+        "playerStart": { "x": 1, "z": 1 },
+        "tiles": "auto",
+        "objects": [
+            { "type": "coin", "x": 3, "z": 1 },
+            { "type": "coin", "x": 5, "z": 3 },
+            { "type": "coin", "x": 7, "z": 5 },
+            { "type": "coin", "x": 9, "z": 7 },
+            { "type": "bouncingPlatform", "x": 2, "z": 2 },
+            { "type": "bouncingPlatform", "x": 4, "z": 4 },
+            { "type": "bouncingPlatform", "x": 6, "z": 6 },
+            { "type": "spikeTrap", "x": 3, "z": 7 },
+            { "type": "spikeTrap", "x": 5, "z": 9 },
+            { "type": "key", "x": 8, "z": 8 },
+            { "type": "goal", "x": 9, "z": 9 }
+        ]
+    },
+    {
+        "name": "Final Boss",
+        "number": 4,
+        "gridSize": 10,
+        "playerStart": { "x": 0, "z": 0 },
+        "tiles": "auto",
+        "objects": [
+            { "type": "coin", "x": 1, "z": 1 },
+            { "type": "coin", "x": 2, "z": 2 },
+            { "type": "coin", "x": 3, "z": 3 },
+            { "type": "coin", "x": 4, "z": 4 },
+            { "type": "coin", "x": 5, "z": 5 },
+            { "type": "coin", "x": 6, "z": 6 },
+            { "type": "spikeTrap", "x": 1, "z": 3 },
+            { "type": "spikeTrap", "x": 3, "z": 5 },
+            { "type": "spikeTrap", "x": 5, "z": 7 },
+            { "type": "spikeTrap", "x": 7, "z": 3 },
+            { "type": "spikeTrap", "x": 2, "z": 6 },
+            { "type": "teleporter", "x": 1, "z": 8, "pairId": 1, "destination": { "x": 8, "z": 1 } },
+            { "type": "teleporter", "x": 8, "z": 1, "pairId": 1, "destination": { "x": 1, "z": 8 } },
+            { "type": "bouncingPlatform", "x": 4, "z": 8 },
+            { "type": "bouncingPlatform", "x": 6, "z": 2 },
+            { "type": "key", "x": 7, "z": 7 },
+            { "type": "goal", "x": 9, "z": 9 }
+        ]
+    }
+] 

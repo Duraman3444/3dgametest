@@ -1,0 +1,1843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Game Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 16px;
+            z-index: 100;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            font-size: 14px;
+            z-index: 100;
+        }
+        
+        /* Achievement Notification Styles */
+        @keyframes slideInRight {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOutRight {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+        
+        /* HUD Animation Styles */
+        @keyframes scoreIncrease {
+            0% { transform: scale(1); color: inherit; }
+            50% { transform: scale(1.2); color: #00ff00; }
+            100% { transform: scale(1); color: inherit; }
+        }
+        
+        @keyframes livesDecrease {
+            0% { transform: scale(1); color: inherit; }
+            25% { transform: scale(1.3); color: #ff0000; }
+            50% { transform: scale(0.8); color: #ff0000; }
+            100% { transform: scale(1); color: inherit; }
+        }
+        
+        @keyframes coinCollect {
+            0% { transform: scale(1) rotate(0deg); color: inherit; }
+            50% { transform: scale(1.4) rotate(180deg); color: #ffd700; }
+            100% { transform: scale(1) rotate(360deg); color: inherit; }
+        }
+        
+        @keyframes statusChange {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+        
+        @keyframes progressFill {
+            from { width: 0%; }
+            to { width: var(--target-width); }
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        
+        .achievement-notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #ffd700, #ffb347);
+            color: #333;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            z-index: 10000;
+            min-width: 300px;
+            max-width: 400px;
+            animation: slideInRight 0.5s ease-out;
+        }
+        
+        .achievement-content {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .achievement-icon {
+            font-size: 32px;
+            flex-shrink: 0;
+        }
+        
+        .achievement-text {
+            flex: 1;
+        }
+        
+        .achievement-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .achievement-name {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #222;
+        }
+        
+        .achievement-description {
+            font-size: 14px;
+            color: #555;
+            line-height: 1.3;
+        }
+        
+        /* Level Menu Styles */
+        .level-menu {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.3s ease;
+        }
+        
+        .level-menu.hidden {
+            display: none;
+        }
+        
+        .level-menu-content {
+            background-color: #1a1a1a;
+            border-radius: 10px;
+            padding: 20px;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        
+        .level-menu-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+        }
+        
+        .level-menu-header h2 {
+            color: #fff;
+            margin: 0;
+        }
+        
+        .close-menu {
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        
+        .close-menu:hover {
+            background-color: #333;
+        }
+        
+        .level-mode-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .mode-btn {
+            padding: 10px 20px;
+            border: 2px solid #333;
+            background-color: #2a2a2a;
+            color: #fff;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .mode-btn.active {
+            background-color: #0066cc;
+            border-color: #0066cc;
+        }
+        
+        .mode-btn:hover {
+            background-color: #333;
+        }
+        
+        .mode-btn.active:hover {
+            background-color: #0055aa;
+        }
+        
+        .level-progress {
+            margin-bottom: 20px;
+        }
+        
+        .progress-stats {
+            display: flex;
+            justify-content: space-between;
+            color: #ccc;
+            margin-bottom: 10px;
+        }
+        
+        .progress-bar-container {
+            width: 100%;
+            height: 20px;
+            background-color: #333;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #00ff00, #ffff00, #ff6600);
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+        
+        .level-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .level-btn {
+            padding: 15px 10px;
+            border: 2px solid #333;
+            background-color: #2a2a2a;
+            color: #fff;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+        }
+        
+        .level-btn:hover {
+            background-color: #333;
+            transform: translateY(-2px);
+        }
+        
+        .level-btn.completed {
+            background-color: #2a4a2a;
+            border-color: #00ff00;
+        }
+        
+        .level-btn.completed:hover {
+            background-color: #336633;
+        }
+        
+        .level-btn.current {
+            background-color: #4a4a2a;
+            border-color: #ffff00;
+            animation: pulse 2s infinite;
+        }
+        
+        .level-btn.current:hover {
+            background-color: #666633;
+        }
+        
+        .level-btn.locked {
+            background-color: #222;
+            border-color: #666;
+            color: #666;
+            cursor: not-allowed;
+        }
+        
+        .level-btn.locked:hover {
+            background-color: #222;
+            transform: none;
+        }
+        
+        .level-btn .level-number {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .level-btn .level-name {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        
+        .level-btn .level-score {
+            font-size: 10px;
+            color: #ffd700;
+            margin-top: 5px;
+        }
+        
+        .level-btn .level-status {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            font-size: 16px;
+        }
+        
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 255, 0, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 255, 0, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 255, 0, 0); }
+        }
+        
+        .level-menu-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .menu-btn {
+            padding: 10px 20px;
+            border: 2px solid #333;
+            background-color: #2a2a2a;
+            color: #fff;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .menu-btn:hover {
+            background-color: #333;
+        }
+        
+        .menu-btn.primary {
+            background-color: #0066cc;
+            border-color: #0066cc;
+        }
+        
+        .menu-btn.primary:hover {
+            background-color: #0055aa;
+        }
+        
+        .menu-btn.danger {
+            background-color: #cc0000;
+            border-color: #cc0000;
+        }
+        
+        .menu-btn.danger:hover {
+            background-color: #aa0000;
+        }
+        
+        /* Lobby System Styles */
+        .lobby-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.95);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            transition: opacity 0.3s ease;
+        }
+        
+        .lobby-overlay.hidden {
+            display: none;
+        }
+        
+        .lobby-content {
+            background-color: #1a1a1a;
+            border-radius: 15px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            border: 2px solid #333;
+        }
+        
+        .lobby-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .lobby-header h1 {
+            color: #fff;
+            margin: 0 0 10px 0;
+            font-size: 28px;
+        }
+        
+        .lobby-status {
+            color: #00ff88;
+            font-size: 16px;
+            margin: 0;
+        }
+        
+        .lobby-countdown {
+            color: #ff6600;
+            font-size: 18px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        
+        .lobby-players {
+            margin: 20px 0;
+        }
+        
+        .lobby-players h3 {
+            color: #fff;
+            margin: 0 0 15px 0;
+            font-size: 20px;
+        }
+        
+        .player-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .player-item {
+            background-color: #2a2a2a;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+        }
+        
+        .player-item.ready {
+            border-color: #00ff88;
+            background-color: #1a2a1a;
+        }
+        
+        .player-item.host {
+            border-color: #ffd700;
+            background-color: #2a2a1a;
+        }
+        
+        .player-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .player-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid #fff;
+        }
+        
+        .player-name {
+            color: #fff;
+            font-weight: bold;
+        }
+        
+        .player-badge {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #fff;
+            font-weight: bold;
+        }
+        
+        .player-badge.host {
+            background-color: #ffd700;
+            color: #000;
+        }
+        
+        .player-status {
+            font-size: 16px;
+        }
+        
+        .player-status.ready {
+            color: #00ff88;
+        }
+        
+        .player-status.not-ready {
+            color: #ff6666;
+        }
+        
+        .lobby-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+        
+        .lobby-btn {
+            padding: 12px 24px;
+            border: 2px solid #333;
+            background-color: #2a2a2a;
+            color: #fff;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            min-width: 120px;
+        }
+        
+        .lobby-btn:hover {
+            background-color: #333;
+            transform: translateY(-2px);
+        }
+        
+        .lobby-btn.ready {
+            background-color: #00aa00;
+            border-color: #00aa00;
+        }
+        
+        .lobby-btn.ready:hover {
+            background-color: #008800;
+        }
+        
+        .lobby-btn.not-ready {
+            background-color: #aa0000;
+            border-color: #aa0000;
+        }
+        
+        .lobby-btn.not-ready:hover {
+            background-color: #880000;
+        }
+        
+        .lobby-btn.start-game {
+            background-color: #ff6600;
+            border-color: #ff6600;
+        }
+        
+        .lobby-btn.start-game:hover {
+            background-color: #dd5500;
+        }
+        
+        .lobby-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .lobby-btn:disabled:hover {
+            background-color: #2a2a2a;
+            transform: none;
+        }
+        
+        .lobby-info {
+            text-align: center;
+            margin-top: 20px;
+            color: #ccc;
+            font-size: 14px;
+        }
+        
+        /* Voting System Styles */
+        .voting-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 3000;
+            transition: opacity 0.3s ease;
+        }
+        
+        .voting-overlay.hidden {
+            display: none;
+        }
+        
+        .voting-content {
+            background-color: #1a1a1a;
+            border-radius: 15px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            border: 2px solid #ffd700;
+        }
+        
+        .voting-header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        
+        .voting-header h2 {
+            color: #ffd700;
+            margin: 0 0 10px 0;
+            font-size: 24px;
+        }
+        
+        .voting-completed-by {
+            color: #00ff88;
+            font-size: 16px;
+            margin: 0 0 10px 0;
+        }
+        
+        .voting-timer {
+            color: #ff6600;
+            font-size: 18px;
+            font-weight: bold;
+            margin: 0;
+        }
+        
+        .voting-options {
+            margin: 25px 0;
+        }
+        
+        .voting-option {
+            background-color: #2a2a2a;
+            border: 2px solid #333;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 10px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .voting-option:hover {
+            background-color: #333;
+            border-color: #555;
+        }
+        
+        .voting-option.selected {
+            background-color: #2a4a2a;
+            border-color: #00ff88;
+        }
+        
+        .voting-option.restart {
+            border-left: 4px solid #ff6600;
+        }
+        
+        .voting-option.continue {
+            border-left: 4px solid #00ff88;
+        }
+        
+        .voting-option-content {
+            flex: 1;
+        }
+        
+        .voting-option-title {
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+            margin: 0 0 5px 0;
+        }
+        
+        .voting-option-description {
+            color: #ccc;
+            font-size: 14px;
+            margin: 0;
+        }
+        
+        .voting-option-votes {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .voting-vote-count {
+            color: #fff;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        
+        .voting-vote-bar {
+            width: 60px;
+            height: 8px;
+            background-color: #333;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .voting-vote-fill {
+            height: 100%;
+            background-color: #00ff88;
+            transition: width 0.3s ease;
+        }
+        
+        .voting-results {
+            margin-top: 25px;
+            padding: 20px;
+            background-color: #2a2a2a;
+            border-radius: 10px;
+            border: 2px solid #333;
+            text-align: center;
+        }
+        
+        .voting-results.hidden {
+            display: none;
+        }
+        
+        .voting-results h3 {
+            color: #ffd700;
+            margin: 0 0 10px 0;
+        }
+        
+        .voting-results-winner {
+            color: #00ff88;
+            font-size: 18px;
+            font-weight: bold;
+            margin: 0 0 10px 0;
+        }
+        
+        .voting-results-stats {
+            color: #ccc;
+            font-size: 14px;
+            margin: 0;
+        }
+        
+        .voting-status {
+            text-align: center;
+            margin-top: 20px;
+            color: #ccc;
+            font-size: 14px;
+        }
+        
+        .voting-status.voted {
+            color: #00ff88;
+        }
+        
+        .voting-status.waiting {
+            color: #ffaa00;
+        }
+        
+        /* Game HUD Styles */
+        #game-hud {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1000;
+            font-family: 'Arial', sans-serif;
+        }
+        
+        /* HUD Element Transitions */
+        .hud-element {
+            transition: all 0.3s ease;
+        }
+        
+        .hud-stat {
+            transition: all 0.2s ease;
+        }
+        
+        .hud-stat.animate-score {
+            animation: scoreIncrease 0.5s ease;
+        }
+        
+        .hud-stat.animate-lives {
+            animation: livesDecrease 0.6s ease;
+        }
+        
+        .hud-stat.animate-coin {
+            animation: coinCollect 0.7s ease;
+        }
+        
+        .hud-stat.animate-pulse {
+            animation: pulse 0.4s ease;
+        }
+        
+        .hud-stat.animate-shake {
+            animation: shake 0.5s ease;
+        }
+        
+        #game-hud > div {
+            position: absolute;
+            pointer-events: auto;
+        }
+        
+        /* HUD Panel Base Style */
+        .hud-panel {
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 10px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        /* Top Left: Level Info */
+        #hud-top-left {
+            top: 20px;
+            left: 20px;
+        }
+        
+        #level-info {
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 15px rgba(0, 255, 255, 0.2);
+            text-align: center;
+            min-width: 150px;
+            transition: all 0.3s ease;
+        }
+        
+        #level-name {
+            color: #00ffff;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+            transition: all 0.3s ease;
+        }
+        
+        #level-timer {
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.3);
+            transition: all 0.2s ease;
+        }
+        
+        /* Top Right: Connection Status */
+        #hud-top-right {
+            top: 20px;
+            right: 20px;
+        }
+        
+        #connection-status {
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 10px 15px;
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        #status-indicator {
+            font-size: 14px;
+            animation: pulse 2s infinite;
+        }
+        
+        #status-text {
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Bottom Left: Player Stats */
+        #hud-bottom-left {
+            bottom: 20px;
+            left: 20px;
+        }
+        
+        #player-stats {
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 215, 0, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 15px rgba(255, 215, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 120px;
+            transition: all 0.3s ease;
+        }
+        
+        #lives-display, #score-display {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        #lives-display {
+            color: #ff4444;
+        }
+        
+        #score-display {
+            color: #ffd700;
+        }
+        
+        .stat-icon {
+            font-size: 16px;
+            filter: drop-shadow(0 0 5px currentColor);
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            opacity: 0.8;
+        }
+        
+        #lives-count, #score-count {
+            font-size: 18px;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 10px currentColor;
+            min-width: 30px;
+            transition: all 0.3s ease;
+        }
+        
+        /* Bottom Right: Collectibles */
+        #hud-bottom-right {
+            bottom: 20px;
+            right: 20px;
+        }
+        
+        #collectibles-display {
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 15px;
+            backdrop-filter: blur(5px);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 100px;
+            transition: all 0.3s ease;
+        }
+        
+        #coins-display, #key-display {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        #coins-display {
+            color: #ffd700;
+        }
+        
+        #key-display {
+            color: #ff6600;
+        }
+        
+        #coins-count, #coins-total {
+            font-size: 16px;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 5px currentColor;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-separator {
+            color: #ffffff;
+            font-weight: bold;
+        }
+        
+        #key-status {
+            font-size: 16px;
+            font-weight: bold;
+            text-shadow: 0 0 5px currentColor;
+        }
+        
+        #key-status.has-key {
+            color: #00ff00;
+            animation: glow 2s infinite;
+        }
+        
+        @keyframes glow {
+            0%, 100% { text-shadow: 0 0 5px currentColor; }
+            50% { text-shadow: 0 0 20px currentColor, 0 0 30px currentColor; }
+        }
+        
+        /* Center: Messages */
+        #hud-center {
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        
+        #message-display {
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 10px;
+            padding: 15px 25px;
+            backdrop-filter: blur(10px);
+            color: #ffffff;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            min-width: 200px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        
+        #message-display.show {
+            opacity: 1;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            #hud-top-left, #hud-top-right {
+                top: 10px;
+            }
+            
+            #hud-top-left {
+                left: 10px;
+            }
+            
+            #hud-top-right {
+                right: 10px;
+            }
+            
+            #hud-bottom-left, #hud-bottom-right {
+                bottom: 10px;
+            }
+            
+            #hud-bottom-left {
+                left: 10px;
+            }
+            
+            #hud-bottom-right {
+                right: 10px;
+            }
+            
+            #level-info, #player-stats, #collectibles-display {
+                padding: 10px;
+            }
+            
+            #level-name {
+                font-size: 16px;
+            }
+            
+            #level-timer {
+                font-size: 14px;
+            }
+            
+            #lives-count, #score-count {
+                font-size: 16px;
+            }
+            
+            .stat-label {
+                font-size: 10px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            #player-stats {
+                flex-direction: row;
+                gap: 15px;
+            }
+            
+            #collectibles-display {
+                flex-direction: row;
+                gap: 15px;
+            }
+            
+            #level-info {
+                min-width: 120px;
+            }
+            
+            #message-display {
+                font-size: 16px;
+                padding: 12px 20px;
+            }
+        }
+        
+        /* Pause Menu Styles */
+        .pause-menu {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            backdrop-filter: blur(5px);
+            transition: all 0.3s ease;
+        }
+        
+        .pause-menu.hidden {
+            display: none;
+        }
+        
+        .pause-menu-content {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            border-radius: 15px;
+            padding: 40px;
+            min-width: 300px;
+            max-width: 400px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border: 2px solid #333;
+            text-align: center;
+            animation: pauseMenuSlideIn 0.3s ease-out;
+        }
+        
+        @keyframes pauseMenuSlideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        .pause-menu-header {
+            margin-bottom: 30px;
+        }
+        
+        .pause-menu-header h2 {
+            color: #fff;
+            font-size: 28px;
+            margin: 0;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        
+        .pause-menu-options {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .pause-btn {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 15px;
+            padding: 15px 20px;
+            background: linear-gradient(135deg, #2a2a2a 0%, #3a3a3a 100%);
+            border: 2px solid #444;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: left;
+            min-height: 50px;
+        }
+        
+        .pause-btn:hover {
+            background: linear-gradient(135deg, #3a3a3a 0%, #4a4a4a 100%);
+            border-color: #555;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .pause-btn.primary {
+            background: linear-gradient(135deg, #0066cc 0%, #0077dd 100%);
+            border-color: #0088ff;
+        }
+        
+        .pause-btn.primary:hover {
+            background: linear-gradient(135deg, #0077dd 0%, #0088ff 100%);
+            border-color: #0099ff;
+        }
+        
+        .pause-btn-icon {
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+        }
+        
+        .pause-menu-footer {
+            border-top: 1px solid #444;
+            padding-top: 20px;
+            margin-top: 10px;
+        }
+        
+        .pause-menu-footer p {
+            color: #ccc;
+            margin: 0;
+            font-size: 14px;
+        }
+        
+        .pause-menu-footer kbd {
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #fff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+        
+                 /* Responsive pause menu */
+         @media (max-width: 768px) {
+             .pause-menu-content {
+                 padding: 30px 20px;
+                 min-width: 280px;
+                 max-width: 320px;
+             }
+             
+             .pause-btn {
+                 padding: 12px 15px;
+                 font-size: 14px;
+             }
+             
+             .pause-btn-icon {
+                 font-size: 18px;
+                 width: 20px;
+                 height: 20px;
+             }
+         }
+         
+         /* Victory Screen Styles */
+         .victory-screen {
+             position: fixed;
+             top: 0;
+             left: 0;
+             width: 100%;
+             height: 100%;
+             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+             display: flex;
+             justify-content: center;
+             align-items: center;
+             z-index: 3000;
+             opacity: 1;
+             visibility: visible;
+             transition: all 0.5s ease;
+         }
+         
+         .victory-screen.hidden {
+             opacity: 0;
+             visibility: hidden;
+         }
+         
+         .victory-content {
+             background: linear-gradient(135deg, #2d2d2d 0%, #1a1a1a 100%);
+             border-radius: 20px;
+             padding: 40px;
+             max-width: 90vw;
+             max-height: 90vh;
+             overflow-y: auto;
+             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+             border: 2px solid #444;
+             animation: victorySlideIn 0.8s ease-out;
+         }
+         
+         @keyframes victorySlideIn {
+             from {
+                 transform: translateY(-100px) scale(0.8);
+                 opacity: 0;
+             }
+             to {
+                 transform: translateY(0) scale(1);
+                 opacity: 1;
+             }
+         }
+         
+         .victory-header {
+             text-align: center;
+             margin-bottom: 30px;
+         }
+         
+         .victory-title {
+             font-size: 48px;
+             font-weight: bold;
+             color: #ffd700;
+             margin: 0 0 10px 0;
+             text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+             animation: victoryGlow 2s ease-in-out infinite alternate;
+         }
+         
+         @keyframes victoryGlow {
+             from {
+                 text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+             }
+             to {
+                 text-shadow: 0 0 30px rgba(255, 215, 0, 0.8);
+             }
+         }
+         
+         .victory-subtitle {
+             font-size: 24px;
+             color: #fff;
+             margin: 0;
+             text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+         }
+         
+         .victory-stats {
+             margin-bottom: 30px;
+         }
+         
+         .stats-grid {
+             display: grid;
+             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+             gap: 20px;
+             margin-bottom: 20px;
+         }
+         
+         .stat-item {
+             background: linear-gradient(135deg, #333 0%, #444 100%);
+             padding: 20px;
+             border-radius: 15px;
+             text-align: center;
+             border: 1px solid #555;
+             transition: all 0.3s ease;
+         }
+         
+         .stat-item:hover {
+             transform: translateY(-5px);
+             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+         }
+         
+         .stat-number {
+             font-size: 32px;
+             font-weight: bold;
+             color: #ffd700;
+             margin-bottom: 8px;
+             text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+         }
+         
+         .stat-label {
+             font-size: 14px;
+             color: #ccc;
+             text-transform: uppercase;
+             letter-spacing: 1px;
+         }
+         
+         .victory-achievements {
+             margin-bottom: 30px;
+         }
+         
+         .victory-achievements h3 {
+             color: #ffd700;
+             font-size: 24px;
+             margin-bottom: 15px;
+             text-align: center;
+         }
+         
+         .achievements-list {
+             display: flex;
+             flex-wrap: wrap;
+             gap: 10px;
+             justify-content: center;
+         }
+         
+         .achievement-item {
+             background: linear-gradient(135deg, #2d5a2d 0%, #1a3f1a 100%);
+             padding: 10px 15px;
+             border-radius: 20px;
+             border: 1px solid #4a8f4a;
+             color: #90ee90;
+             font-size: 14px;
+             display: flex;
+             align-items: center;
+             gap: 8px;
+             animation: achievementBounce 0.6s ease-out;
+         }
+         
+         @keyframes achievementBounce {
+             0%, 20%, 50%, 80%, 100% {
+                 transform: translateY(0);
+             }
+             40% {
+                 transform: translateY(-10px);
+             }
+             60% {
+                 transform: translateY(-5px);
+             }
+         }
+         
+         .victory-credits {
+             margin-bottom: 30px;
+         }
+         
+         .victory-credits h3 {
+             color: #ffd700;
+             font-size: 24px;
+             margin-bottom: 15px;
+             text-align: center;
+         }
+         
+         .credits-content {
+             display: grid;
+             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+             gap: 20px;
+         }
+         
+         .credit-section {
+             background: linear-gradient(135deg, #333 0%, #444 100%);
+             padding: 20px;
+             border-radius: 15px;
+             border: 1px solid #555;
+         }
+         
+         .credit-section h4 {
+             color: #ffd700;
+             font-size: 16px;
+             margin: 0 0 10px 0;
+         }
+         
+         .credit-section p {
+             color: #ccc;
+             margin: 0;
+             line-height: 1.5;
+         }
+         
+         .victory-actions {
+             display: flex;
+             gap: 20px;
+             justify-content: center;
+             flex-wrap: wrap;
+         }
+         
+         .victory-btn {
+             display: flex;
+             align-items: center;
+             gap: 10px;
+             padding: 15px 25px;
+             background: linear-gradient(135deg, #2a2a2a 0%, #3a3a3a 100%);
+             border: 2px solid #444;
+             border-radius: 12px;
+             color: #fff;
+             font-size: 16px;
+             font-weight: 500;
+             cursor: pointer;
+             transition: all 0.3s ease;
+             text-decoration: none;
+             min-width: 140px;
+             justify-content: center;
+         }
+         
+         .victory-btn:hover {
+             background: linear-gradient(135deg, #3a3a3a 0%, #4a4a4a 100%);
+             border-color: #555;
+             transform: translateY(-2px);
+             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+         }
+         
+         .victory-btn.primary {
+             background: linear-gradient(135deg, #ffd700 0%, #ffdd33 100%);
+             border-color: #ffd700;
+             color: #333;
+         }
+         
+         .victory-btn.primary:hover {
+             background: linear-gradient(135deg, #ffdd33 0%, #ffe066 100%);
+             border-color: #ffdd33;
+         }
+         
+         .victory-btn-icon {
+             font-size: 20px;
+         }
+         
+         /* Responsive victory screen */
+         @media (max-width: 768px) {
+             .victory-content {
+                 padding: 20px;
+                 margin: 10px;
+             }
+             
+             .victory-title {
+                 font-size: 36px;
+             }
+             
+             .victory-subtitle {
+                 font-size: 20px;
+             }
+             
+             .stats-grid {
+                 grid-template-columns: repeat(2, 1fr);
+                 gap: 15px;
+             }
+             
+             .stat-number {
+                 font-size: 24px;
+             }
+             
+             .victory-actions {
+                 flex-direction: column;
+                 align-items: center;
+             }
+             
+             .victory-btn {
+                 width: 100%;
+                 max-width: 250px;
+             }
+         }
+     </style>
+</head>
+<body>
+    <!-- Game HUD -->
+    <div id="game-hud">
+        <!-- Top Left: Level Info -->
+        <div id="hud-top-left">
+            <div id="level-info">
+                <div id="level-name" class="hud-stat">Level 1</div>
+                <div id="level-timer" class="hud-stat">00:00.00</div>
+            </div>
+        </div>
+        
+        <!-- Top Right: Connection Status -->
+        <div id="hud-top-right">
+            <div id="connection-status">
+                <span id="status-indicator">🔴</span>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </div>
+        
+        <!-- Bottom Left: Player Stats -->
+        <div id="hud-bottom-left">
+            <div id="player-stats">
+                <div id="lives-display">
+                    <span class="stat-icon">❤️</span>
+                    <span id="lives-count" class="hud-stat">3</span>
+                    <span class="stat-label">Lives</span>
+                </div>
+                <div id="score-display">
+                    <span class="stat-icon">🏆</span>
+                    <span id="score-count" class="hud-stat">0</span>
+                    <span class="stat-label">Score</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Bottom Right: Collectibles -->
+        <div id="hud-bottom-right">
+            <div id="collectibles-display">
+                <div id="coins-display">
+                    <span class="stat-icon">💰</span>
+                    <span id="coins-count" class="hud-stat">0</span>
+                    <span class="stat-separator">/</span>
+                    <span id="coins-total" class="hud-stat">0</span>
+                </div>
+                <div id="key-display">
+                    <span class="stat-icon">🔑</span>
+                    <span id="key-status" class="hud-stat">✗</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Center: Messages -->
+        <div id="hud-center">
+            <div id="message-display"></div>
+        </div>
+        
+        <!-- Debug Info (hidden by default) -->
+        <div id="debug-info" style="display: none;">
+            <p>Player Position: <span id="position">Grid: (5, 5)</span></p>
+        </div>
+    </div>
+    <div id="controls">
+        <p>Arrow keys / WASD: Move red sphere (auto-detects surface transitions at edges)</p>
+        <p>Space: Manual gravity shift when at grid edge | N: Restart game | M: Cheat (get key) | P: Pause menu | ESC: Level menu</p>
+        <p>C: Toggle camera mode (Third-person/Orbit) | R: Reset camera position | Ctrl+R: Reload config</p>
+        <p>1-4: Camera presets (Default/Front/Top/Side) | Tab: Cycle presets</p>
+        <p>L: Toggle JSON levels / Random generation | [ ]: Previous level | ] : Next level | Shift+R: Reload level data</p>
+        <p>Q: Return to lobby (when in game) | When all JSON levels completed: 1=Restart, 2=Random mode, 3=Loop back</p>
+        <p>💰 Collect coins | 🔑 Find the key | 🏁 Exit at the goal | ⚠️ Avoid spike traps | 🌀 Use teleport tiles | 🟢 Bouncing platforms launch you high!</p>
+        <p>🌈 Each player gets a unique color | 🏷️ Name tags show player colors | 🎨 12 distinct colors available</p>
+        <p>🏢 Lobby System: Join lobby → Ready up → Start game together | Host can start manually | All players sync collectibles</p>
+        <p>🗳️ Voting System: On level completion, vote to restart or continue | 30s timeout | Majority wins (continue on tie)</p>
+        <p>🎵 Background Music: Ambient music plays during gameplay | Toggle music on/off and adjust volume in sound controls</p>
+        <p>🏆 Victory Screen: Complete all levels to see detailed statistics, achievements, and credits | Multiple completion options available</p>
+        <p>⚙️ Configuration: Adjust game settings like tile size, movement speed, and camera smoothness via config.json</p>
+        <p id="camera-mode">Third-person camera: Follows player smoothly with gravity-aware orientation</p>
+        <p id="camera-preset">Current preset: Default (Behind)</p>
+    </div>
+    
+    <!-- Level Selection Menu -->
+    <div id="level-menu" class="level-menu hidden">
+        <div class="level-menu-content">
+            <div class="level-menu-header">
+                <h2>Level Selection</h2>
+                <button class="close-menu" onclick="toggleLevelMenu()">×</button>
+            </div>
+            
+            <div class="level-mode-selector">
+                <button id="json-mode-btn" class="mode-btn active" onclick="switchLevelMode('json')">JSON Levels</button>
+                <button id="random-mode-btn" class="mode-btn" onclick="switchLevelMode('random')">Random Mode</button>
+            </div>
+            
+            <div class="level-progress">
+                <div class="progress-stats">
+                    <span id="progress-text">Progress: 0/0</span>
+                    <span id="score-text">Total Score: 0</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="progress-bar" class="progress-bar"></div>
+                </div>
+            </div>
+            
+            <div class="level-grid" id="level-grid">
+                <!-- Level buttons will be populated by JavaScript -->
+            </div>
+            
+            <div class="level-menu-footer">
+                <button class="menu-btn" onclick="resetProgress()">Reset Progress</button>
+                <button class="menu-btn" onclick="reloadLevelData()">Reload Levels</button>
+                <button class="menu-btn" onclick="exportProgressData()">Export Progress</button>
+                <button class="menu-btn" onclick="importProgressData()">Import Progress</button>
+                <button class="menu-btn" onclick="showAdvancedResetMenu()">Advanced Reset</button>
+                <button class="menu-btn primary" onclick="toggleLevelMenu()">Resume Game</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Lobby System -->
+    <div id="lobby-overlay" class="lobby-overlay hidden">
+        <div class="lobby-content">
+            <div class="lobby-header">
+                <h1>Game Lobby</h1>
+                <p id="lobby-status" class="lobby-status">Waiting for players...</p>
+                <p id="lobby-countdown" class="lobby-countdown" style="display: none;"></p>
+            </div>
+            
+            <div class="lobby-players">
+                <h3>Players (<span id="lobby-player-count">0</span>/<span id="lobby-max-players">8</span>)</h3>
+                <div id="lobby-player-list" class="player-list">
+                    <!-- Player items will be populated by JavaScript -->
+                </div>
+            </div>
+            
+            <div class="lobby-actions">
+                <button id="lobby-ready-btn" class="lobby-btn not-ready" onclick="toggleReady()">Not Ready</button>
+                <button id="lobby-start-btn" class="lobby-btn start-game" onclick="startGame()" style="display: none;">Start Game</button>
+                <button id="lobby-leave-btn" class="lobby-btn" onclick="leaveLobby()">Leave Lobby</button>
+            </div>
+            
+            <div class="lobby-info">
+                <p>All players must be ready before the game can start.</p>
+                <p>The host can start the game manually with minimum players.</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Voting System -->
+    <div id="voting-overlay" class="voting-overlay hidden">
+        <div class="voting-content">
+            <div class="voting-header">
+                <h2>Level Complete!</h2>
+                <p id="voting-completed-by" class="voting-completed-by"></p>
+                <p id="voting-timer" class="voting-timer"></p>
+            </div>
+            
+            <div id="voting-options" class="voting-options">
+                <div id="voting-option-restart" class="voting-option restart" onclick="castVote('restart')">
+                    <div class="voting-option-content">
+                        <h3 class="voting-option-title">🔄 Restart Level</h3>
+                        <p class="voting-option-description">Play this level again from the beginning</p>
+                    </div>
+                    <div class="voting-option-votes">
+                        <span id="restart-vote-count" class="voting-vote-count">0</span>
+                        <div class="voting-vote-bar">
+                            <div id="restart-vote-fill" class="voting-vote-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="voting-option-continue" class="voting-option continue" onclick="castVote('continue')">
+                    <div class="voting-option-content">
+                        <h3 class="voting-option-title">➡️ Continue</h3>
+                        <p class="voting-option-description">Move on to the next level</p>
+                    </div>
+                    <div class="voting-option-votes">
+                        <span id="continue-vote-count" class="voting-vote-count">0</span>
+                        <div class="voting-vote-bar">
+                            <div id="continue-vote-fill" class="voting-vote-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="voting-results" class="voting-results hidden">
+                <h3>Results</h3>
+                <p id="voting-results-winner" class="voting-results-winner"></p>
+                <p id="voting-results-stats" class="voting-results-stats"></p>
+            </div>
+            
+            <div id="voting-status" class="voting-status">
+                Click an option to cast your vote
+            </div>
+        </div>
+    </div>
+    
+    <!-- Pause Menu -->
+    <div id="pause-menu" class="pause-menu hidden">
+        <div class="pause-menu-content">
+            <div class="pause-menu-header">
+                <h2>Game Paused</h2>
+            </div>
+            
+            <div class="pause-menu-options">
+                <button id="resume-btn" class="pause-btn primary" onclick="resumeGame()">
+                    <span class="pause-btn-icon">▶️</span>
+                    Resume Game
+                </button>
+                <button id="restart-btn" class="pause-btn" onclick="restartGame()">
+                    <span class="pause-btn-icon">🔄</span>
+                    Restart Level
+                </button>
+                <button id="exit-btn" class="pause-btn" onclick="exitGame()">
+                    <span class="pause-btn-icon">🚪</span>
+                    Exit to Lobby
+                </button>
+            </div>
+            
+            <div class="pause-menu-footer">
+                <p>Press <kbd>P</kbd> to resume</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Victory Screen -->
+    <div id="victory-screen" class="victory-screen hidden">
+        <div class="victory-content">
+            <div class="victory-header">
+                <h1 class="victory-title">🎉 VICTORY! 🎉</h1>
+                <h2 class="victory-subtitle">All Levels Completed!</h2>
+            </div>
+            
+            <div class="victory-stats">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-number" id="total-levels">0</div>
+                        <div class="stat-label">Levels Completed</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="total-score">0</div>
+                        <div class="stat-label">Total Score</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="average-score">0</div>
+                        <div class="stat-label">Average Score</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="lives-remaining">0</div>
+                        <div class="stat-label">Lives Remaining</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="total-coins">0</div>
+                        <div class="stat-label">Coins Collected</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="best-time">--:--</div>
+                        <div class="stat-label">Best Time</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="victory-achievements">
+                <h3>🏆 Achievements</h3>
+                <div id="achievements-list" class="achievements-list">
+                    <!-- Achievements will be populated by JavaScript -->
+                </div>
+            </div>
+            
+            <div class="victory-credits">
+                <h3>🎮 Credits</h3>
+                <div class="credits-content">
+                    <div class="credit-section">
+                        <h4>Game Design & Development</h4>
+                        <p>3D Puzzle Adventure Game</p>
+                    </div>
+                    <div class="credit-section">
+                        <h4>Technologies Used</h4>
+                        <p>Three.js • Socket.io • Web Audio API • Howler.js</p>
+                    </div>
+                    <div class="credit-section">
+                        <h4>Features</h4>
+                        <p>Gravity-Based Puzzles • Multiplayer Support • Sound Effects</p>
+                        <p>Dynamic Lighting • Particle Effects • Progressive Difficulty</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="victory-actions">
+                <button id="play-again-btn" class="victory-btn primary" onclick="restartFromVictory()">
+                    <span class="victory-btn-icon">🔄</span>
+                    Play Again
+                </button>
+                <button id="random-mode-btn" class="victory-btn" onclick="switchToRandomMode()">
+                    <span class="victory-btn-icon">🎲</span>
+                    Random Mode
+                </button>
+                <button id="return-lobby-btn" class="victory-btn" onclick="returnToLobbyFromVictory()">
+                    <span class="victory-btn-icon">🏠</span>
+                    Return to Lobby
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="/main.js"></script>
+</body>
+</html> 
