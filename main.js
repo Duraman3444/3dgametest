@@ -3686,20 +3686,26 @@ async function loadLevelData(levelFile = 'levels.json') {
 
 // Initialize JSON levels
 async function initializeJsonLevels() {
-    // Load all levels (existing, programmatic, and modular)
+    // Load all levels (only from levels.json)
     const allLevels = await loadAllLevels();
+    
+    console.log(`📄 initializeJsonLevels: loaded ${allLevels.length} levels`);
+    console.log(`📄 Level data:`, allLevels);
     
     if (allLevels.length > 0) {
         jsonLevels = allLevels;
         // Automatically switch to JSON mode if levels loaded successfully
         useJsonLevels = true;
-        console.log(`Initialized with ${jsonLevels.length} levels (including programmatic and modular) - switching to JSON mode`);
+        levelDataLoaded = true;
+        console.log(`Initialized with ${jsonLevels.length} levels - switching to JSON mode`);
+        console.log(`📄 useJsonLevels: ${useJsonLevels}, levelDataLoaded: ${levelDataLoaded}`);
         
         // Show mode switch message
         showMessage('Enhanced level mode activated - Press ESC for level menu', '#00ccff');
     } else {
         // Fall back to random generation
         useJsonLevels = false;
+        levelDataLoaded = false;
         console.log('Falling back to random level generation');
         
         // Show fallback message
@@ -5746,53 +5752,26 @@ function generateProgrammaticLevels() {
     return levels;
 }
 
-// Load all available levels (both from files and programmatic)
+// Load all available levels (only from levels.json)
 async function loadAllLevels() {
     const allLevels = [];
     
-    // Load tutorial levels from levels.json (levels 1-5)
+    // Load all levels from levels.json (levels 1-7)
     try {
         const response = await fetch('levels.json');
         if (response.ok) {
             const existingLevels = await response.json();
             
-            // Use first 5 levels as tutorial levels (levels 1-5)
-            const tutorialLevels = existingLevels.slice(0, 5);
-            allLevels.push(...tutorialLevels);
+            // Use all levels from levels.json
+            allLevels.push(...existingLevels);
             
-            console.log(`✅ Loaded ${tutorialLevels.length} tutorial levels (levels 1-5)`);
+            console.log(`✅ Loaded ${allLevels.length} levels from levels.json`);
         }
     } catch (error) {
         console.warn('Could not load existing levels.json:', error);
     }
     
-    // Add programmatic 3D complex levels after the tutorial levels (starting from level 6)
-    const programmaticLevels = generateProgrammaticLevels();
-    
-    // Renumber the programmatic levels to continue from level 6
-    programmaticLevels.forEach((level, index) => {
-        level.number = index + 6; // Start from level 6
-    });
-    
-    allLevels.push(...programmaticLevels);
-    
-    console.log(`✅ Added ${programmaticLevels.length} complex 3D tower levels starting from level 6`);
-    
-    // Try to load modular levels for even more complex levels
-    const modularLevelNames = ['advanced-tower', 'gravity-chambers'];
-    for (const levelName of modularLevelNames) {
-        const levelData = await loadModularLevel(levelName);
-        if (levelData) {
-            // Renumber modular levels to continue sequence
-            levelData.number = allLevels.length + 1;
-            allLevels.push(levelData);
-            console.log(`✅ Successfully loaded modular level: ${levelName} as level ${levelData.number}`);
-        } else {
-            console.warn(`⚠️  Failed to load modular level: ${levelName}`);
-        }
-    }
-    
-    console.log(`✅ Total levels loaded: ${allLevels.length} (5 tutorial + ${allLevels.length - 5} complex 3D levels)`);
+    console.log(`✅ Total levels loaded: ${allLevels.length}`);
     
     return allLevels;
 }
@@ -5943,6 +5922,10 @@ function checkCheckpoints() {
 
 // Function to load level from JSON
 function loadJsonLevel(levelIndex) {
+    console.log(`📄 loadJsonLevel called with levelIndex: ${levelIndex}`);
+    console.log(`📄 jsonLevels.length: ${jsonLevels.length}`);
+    console.log(`📄 jsonLevels array:`, jsonLevels);
+    
     if (levelIndex >= jsonLevels.length) {
         console.log("📄 No more JSON levels, switching to random generation");
         useJsonLevels = false;
@@ -7437,12 +7420,18 @@ function transitionToNextLevel() {
     
     // Immediate level transition - no delays or animations
     try {
+        console.log(`🔄 Transition flags: useJsonLevels=${useJsonLevels}, levelDataLoaded=${levelDataLoaded}`);
+        console.log(`🔄 jsonLevels.length: ${jsonLevels.length}, currentJsonLevelIndex: ${currentJsonLevelIndex}`);
+        
         if (useJsonLevels && levelDataLoaded) {
             // Use JSON levels
+            console.log(`🔄 Current level index: ${currentJsonLevelIndex}, JSON levels length: ${jsonLevels.length}`);
             if (currentJsonLevelIndex < jsonLevels.length - 1) {
                 // Load next JSON level
-                setCurrentLevelIndex(currentJsonLevelIndex + 1);
-                const loadResult = loadJsonLevel(currentJsonLevelIndex);
+                const nextIndex = currentJsonLevelIndex + 1;
+                console.log(`🔄 Loading next JSON level index: ${nextIndex}`);
+                setCurrentLevelIndex(nextIndex);
+                const loadResult = loadJsonLevel(nextIndex);
                 console.log(`🔄 JSON level load result: ${loadResult}`);
             } else {
                 // All JSON levels completed - offer options
@@ -7450,6 +7439,7 @@ function transitionToNextLevel() {
             }
         } else {
             // Use random generation
+            console.log(`🔄 Falling back to random generation because useJsonLevels=${useJsonLevels}, levelDataLoaded=${levelDataLoaded}`);
             gameScore.currentLevel++;
             const coinsForLevel = Math.min(15 + (gameScore.currentLevel - 1) * 2, 25);
             generateNewLevel(coinsForLevel);
