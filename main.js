@@ -2920,15 +2920,27 @@ function initializeOriginalCameraSettings() {
     }
 }
 
-// Optional: Keep OrbitControls for debugging (disabled by default)
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enabled = false; // Disable orbit controls for third-person camera
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-controls.target.set(0, 1, 0); // Set initial target for controls
+// OrbitControls will be initialized after renderer is ready
+let controls;
+let originalControlsTarget;
 
-// Store original controls target for rotation calculations
-const originalControlsTarget = controls.target.clone();
+// Initialize OrbitControls after renderer is created
+function initializeControls() {
+    if (!renderer || !camera) {
+        console.warn('Cannot initialize controls: renderer or camera not ready');
+        return;
+    }
+    
+    // Optional: Keep OrbitControls for debugging (disabled by default)
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enabled = false; // Disable orbit controls for third-person camera
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.target.set(0, 1, 0); // Set initial target for controls
+
+    // Store original controls target for rotation calculations
+    originalControlsTarget = controls.target.clone();
+}
 
 // Player movement system
 const playerState = {
@@ -3346,6 +3358,11 @@ function updateThirdPersonCamera() {
 
 // Toggle between third-person and orbit camera modes
 function toggleCameraMode() {
+    if (!controls) {
+        console.warn('Cannot toggle camera mode: controls not initialized');
+        return;
+    }
+    
     cameraSystem.enabled = !cameraSystem.enabled;
     controls.enabled = !controls.enabled;
     
@@ -3393,8 +3410,10 @@ function toggleCameraMode() {
         }
         
         // Reset orbit controls when switching to it
-        controls.reset();
-        controls.target.set(0, 1, 0);
+        if (controls) {
+            controls.reset();
+            controls.target.set(0, 1, 0);
+        }
     }
 }
 
@@ -3405,7 +3424,7 @@ function resetCameraPosition() {
         setCameraPreset('default');
         cameraSystem.currentPosition.set(5, 5, 5);
         cameraSystem.currentTarget.set(0, 1, 0);
-    } else {
+    } else if (controls) {
         // Reset orbit controls
         controls.reset();
         controls.target.set(0, 1, 0);
@@ -6514,7 +6533,7 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     
     // Handle resize for orbit controls if enabled
-    if (controls.enabled) {
+    if (controls && controls.enabled) {
         controls.handleResize();
     }
     
@@ -6527,7 +6546,7 @@ function animate() {
     requestAnimationFrame(animate);
     
     // Always update controls for damping (if enabled) - allows camera movement even when paused
-    if (controls.enabled) {
+    if (controls && controls.enabled) {
         controls.update();
     }
     
@@ -6594,6 +6613,9 @@ async function init() {
     // Initialize renderer and camera with config values
     initializeRenderer();
     initializeRendererSettings();
+    
+    // Initialize controls after renderer is ready
+    initializeControls();
     
     // Initialize game systems with config values
     initializeTileSettings();
