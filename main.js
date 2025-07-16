@@ -6,6 +6,60 @@ import soundManager from './src/systems/soundManager.js';
 // Game configuration
 let gameConfig = null;
 
+// Three.js Physics System
+const physicsWorld = {
+    gravity: new THREE.Vector3(0, -9.82, 0),
+    surfaces: [],
+    raycaster: new THREE.Raycaster(),
+    downDirection: new THREE.Vector3(0, -1, 0),
+    tempVector: new THREE.Vector3(),
+    tempMatrix: new THREE.Matrix4()
+};
+
+// Physics configuration (loaded from config.json)
+let PHYSICS_CONFIG = {
+    gravity: -9.82,
+    playerRadius: 0.5,
+    groundFriction: 0.85,
+    airFriction: 0.98,
+    acceleration: 12,
+    maxVelocity: 8,
+    jumpForce: 6,
+    bounceRestitution: 0.6,
+    rollingFriction: 0.02,
+    minBounceVelocity: 0.1,
+    maxRollSpeed: 0.5,
+    rollDamping: 0.95
+};
+
+// Update physics configuration from config.json
+function updatePhysicsConfig() {
+    PHYSICS_CONFIG = {
+        gravity: getConfigValue('physics.gravity', -12.0),
+        playerRadius: getConfigValue('physics.playerRadius', 0.5),
+        groundFriction: getConfigValue('physics.groundFriction', 0.92),
+        airFriction: getConfigValue('physics.airFriction', 0.995),
+        acceleration: getConfigValue('physics.acceleration', 15),
+        maxVelocity: getConfigValue('physics.maxVelocity', 10),
+        jumpForce: getConfigValue('physics.jumpForce', 8.5),
+        bounceRestitution: getConfigValue('physics.bounceRestitution', 0.4),
+        rollingFriction: getConfigValue('physics.rollingFriction', 0.008),
+        minBounceVelocity: getConfigValue('physics.minBounceVelocity', 0.2),
+        maxRollSpeed: getConfigValue('physics.maxRollSpeed', 0.8),
+        rollDamping: getConfigValue('physics.rollDamping', 0.98),
+        coyoteTime: getConfigValue('physics.coyoteTime', 0.15),
+        jumpBufferTime: getConfigValue('physics.jumpBufferTime', 0.1),
+        fallMultiplier: getConfigValue('physics.fallMultiplier', 1.8),
+        lowJumpMultiplier: getConfigValue('physics.lowJumpMultiplier', 2.2),
+        terminalVelocity: getConfigValue('physics.terminalVelocity', 15),
+        momentumPreservation: getConfigValue('physics.momentumPreservation', 0.75),
+        precisionThreshold: getConfigValue('physics.precisionThreshold', 0.05)
+    };
+    
+    // Update gravity in physics world
+    physicsWorld.gravity.set(0, PHYSICS_CONFIG.gravity, 0);
+}
+
 // Load configuration from config.json
 async function loadConfig() {
     try {
@@ -98,6 +152,7 @@ async function reloadConfig() {
         initializeTileSettings();
         initializeMovementSettings();
         initializeCameraSystem();
+        updatePhysicsConfig();
         soundManager.updateFromConfig(gameConfig);
         
         // Show success message
@@ -112,6 +167,535 @@ async function reloadConfig() {
         return false;
     }
 }
+
+// Initialize Three.js physics system
+function initializePhysics() {
+    // Add all mesh objects to physics world surfaces
+    physicsWorld.surfaces = [];
+    
+    // Add ground plane
+    const groundGeometry = new THREE.PlaneGeometry(100, 100);
+    const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x333333, transparent: true, opacity: 0.1 });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.1;
+    ground.userData.isGround = true;
+    physicsWorld.surfaces.push(ground);
+    worldGroup.add(ground);
+    
+    console.log('Three.js physics system initialized');
+}
+
+// Player physics properties
+const playerPhysics = {
+    velocity: new THREE.Vector3(0, 0, 0),
+    acceleration: new THREE.Vector3(0, 0, 0),
+    position: new THREE.Vector3(0, 2, 0),
+    isGrounded: false,
+    canJump: false,
+    lastGroundNormal: new THREE.Vector3(0, 1, 0),
+    rollingAxis: new THREE.Vector3(0, 0, 1),
+    rollAngle: 0,
+    rollSpeed: 0,
+    groundDistance: 0,
+    
+    // Input forces
+    inputForce: new THREE.Vector3(0, 0, 0),
+    jumpRequested: false,
+    
+    // Enhanced skill-based movement features
+    coyoteTimer: 0,
+    jumpBufferTimer: 0,
+    lastGroundTime: 0,
+    jumpStartTime: 0,
+    isJumping: false,
+    wasGrounded: false,
+    groundedFrames: 0,
+    airTime: 0,
+    
+    // Movement state tracking
+    movementState: 'idle',
+    previousVelocity: new THREE.Vector3(0, 0, 0),
+    acceleration: new THREE.Vector3(0, 0, 0),
+    
+    // Precision movement
+    lastInputTime: 0,
+    inputMagnitude: 0,
+    precisionMode: false
+};
+
+// Reset player physics to initial state
+function resetPlayerPhysics() {
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.acceleration.set(0, 0, 0);
+    playerPhysics.position.set(0, 2, 0);
+    playerPhysics.isGrounded = false;
+    playerPhysics.canJump = false;
+    playerPhysics.lastGroundNormal.set(0, 1, 0);
+    playerPhysics.rollingAxis.set(0, 0, 1);
+    playerPhysics.rollAngle = 0;
+    playerPhysics.rollSpeed = 0;
+    playerPhysics.groundDistance = 0;
+    playerPhysics.inputForce.set(0, 0, 0);
+    playerPhysics.jumpRequested = false;
+    
+    // Reset enhanced skill-based movement features
+    playerPhysics.coyoteTimer = 0;
+    playerPhysics.jumpBufferTimer = 0;
+    playerPhysics.lastGroundTime = 0;
+    playerPhysics.jumpStartTime = 0;
+    playerPhysics.isJumping = false;
+    playerPhysics.wasGrounded = false;
+    playerPhysics.groundedFrames = 0;
+    playerPhysics.airTime = 0;
+    
+    // Reset movement state tracking
+    playerPhysics.movementState = 'idle';
+    playerPhysics.previousVelocity.set(0, 0, 0);
+    playerPhysics.acceleration.set(0, 0, 0);
+    
+    // Reset precision movement
+    playerPhysics.lastInputTime = 0;
+    playerPhysics.inputMagnitude = 0;
+    playerPhysics.precisionMode = false;
+    
+    // Update visual player position
+    player.position.copy(playerPhysics.position);
+    player.rotation.set(0, 0, 0);
+}
+
+// Ground collision detection using raycasting
+function checkGroundCollision() {
+    const rayOrigin = playerPhysics.position.clone();
+    const rayDirection = new THREE.Vector3(0, -1, 0);
+    const rayDistance = PHYSICS_CONFIG.playerRadius + 0.1;
+    
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
+    
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const distance = intersection.distance;
+        
+        if (distance <= rayDistance) {
+            // Player is on or touching ground
+            const groundY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+            
+            if (playerPhysics.position.y <= groundY) {
+                // Snap to ground
+                playerPhysics.position.y = groundY;
+                
+                // Update ground state
+                playerPhysics.isGrounded = true;
+                playerPhysics.canJump = true;
+                playerPhysics.lastGroundNormal.copy(intersection.face.normal);
+                playerPhysics.groundDistance = distance;
+                
+                // Handle bounce if hitting ground with significant velocity
+                if (playerPhysics.velocity.y < -PHYSICS_CONFIG.minBounceVelocity) {
+                    playerPhysics.velocity.y = -playerPhysics.velocity.y * PHYSICS_CONFIG.bounceRestitution;
+                } else if (playerPhysics.velocity.y < 0) {
+                    playerPhysics.velocity.y = 0;
+                }
+                
+                // Apply surface normal influence for slopes
+                const normalInfluence = 0.1;
+                const surfaceInfluence = intersection.face.normal.clone().multiplyScalar(normalInfluence);
+                playerPhysics.velocity.add(surfaceInfluence);
+            }
+        } else {
+            // Player is in air
+            playerPhysics.isGrounded = false;
+            playerPhysics.canJump = false;
+            playerPhysics.groundDistance = distance;
+        }
+    } else {
+        // No ground detected - player is in air
+        playerPhysics.isGrounded = false;
+        playerPhysics.canJump = false;
+        playerPhysics.groundDistance = Infinity;
+    }
+}
+
+// Update rolling animation based on movement
+function updateRollingAnimation() {
+    const horizontalVelocity = new THREE.Vector3(playerPhysics.velocity.x, 0, playerPhysics.velocity.z);
+    const speed = horizontalVelocity.length();
+    
+    if (speed > 0.01) {
+        // Calculate rolling based on movement direction
+        const movementDirection = horizontalVelocity.normalize();
+        
+        // Create rolling axis perpendicular to movement
+        playerPhysics.rollingAxis.crossVectors(movementDirection, new THREE.Vector3(0, 1, 0)).normalize();
+        
+        // Calculate roll speed based on sphere circumference
+        const circumference = 2 * Math.PI * PHYSICS_CONFIG.playerRadius;
+        playerPhysics.rollSpeed = (speed / circumference) * 2 * Math.PI;
+        
+        // Apply rolling animation
+        playerPhysics.rollAngle += playerPhysics.rollSpeed * (1/60); // Fixed timestep
+        
+        // Apply roll damping
+        playerPhysics.rollSpeed *= PHYSICS_CONFIG.rollDamping;
+        
+        // Update visual sphere rotation
+        const rollQuaternion = new THREE.Quaternion();
+        rollQuaternion.setFromAxisAngle(playerPhysics.rollingAxis, playerPhysics.rollAngle);
+        player.quaternion.copy(rollQuaternion);
+    } else {
+        // Slow down rolling when not moving
+        playerPhysics.rollSpeed *= PHYSICS_CONFIG.rollDamping;
+    }
+}
+
+// Add surface to physics world
+function addPhysicsSurface(mesh) {
+    physicsWorld.surfaces.push(mesh);
+}
+
+// Remove surface from physics world
+function removePhysicsSurface(mesh) {
+    const index = physicsWorld.surfaces.indexOf(mesh);
+    if (index > -1) {
+        physicsWorld.surfaces.splice(index, 1);
+    }
+}
+
+// Apply physics updates without input during transitions
+function applyPhysicsWithoutInput(deltaTime) {
+    // Update previous state
+    playerPhysics.previousVelocity.copy(playerPhysics.velocity);
+    playerPhysics.wasGrounded = playerPhysics.isGrounded;
+    
+    // Update timers
+    updateMovementTimers(deltaTime);
+    
+    // Apply only gravity and momentum, no input forces
+    playerPhysics.inputForce.set(0, 0, 0);
+    
+    // Apply gravity
+    if (!playerPhysics.isGrounded) {
+        const gravityForce = worldState.gravityDirection.clone().multiplyScalar(playerPhysics.gravity);
+        playerPhysics.velocity.add(gravityForce.multiplyScalar(deltaTime));
+    }
+    
+    // Apply ground friction if grounded
+    if (playerPhysics.isGrounded) {
+        playerPhysics.velocity.x *= playerPhysics.groundFriction;
+        playerPhysics.velocity.z *= playerPhysics.groundFriction;
+    }
+    
+    // Apply air resistance
+    if (!playerPhysics.isGrounded) {
+        playerPhysics.velocity.x *= playerPhysics.airResistance;
+        playerPhysics.velocity.z *= playerPhysics.airResistance;
+    }
+    
+    // Update position
+    const deltaPosition = playerPhysics.velocity.clone().multiplyScalar(deltaTime);
+    player.position.add(deltaPosition);
+    
+    // Check ground collision
+    checkGroundCollision();
+    
+    // Update movement state
+    updateMovementState();
+}
+
+// Enhanced physics-based movement system for skill-based gameplay
+function updatePhysicsMovement() {
+    const deltaTime = 1/60; // Fixed timestep for consistent physics
+    const { inputState } = playerState;
+    const currentTime = Date.now() / 1000;
+    
+    // Skip input processing if locked during transitions
+    if (isInputLocked()) {
+        // Still update physics for gravity/momentum but ignore input
+        applyPhysicsWithoutInput(deltaTime);
+        return;
+    }
+    
+    // Store previous state for comparison
+    playerPhysics.previousVelocity.copy(playerPhysics.velocity);
+    playerPhysics.wasGrounded = playerPhysics.isGrounded;
+    
+    // Update timers
+    updateMovementTimers(deltaTime);
+    
+    // Handle input forces with precision mode
+    playerPhysics.inputForce.set(0, 0, 0);
+    
+    // Get camera direction (free movement, not grid-locked)
+    const cameraDirection = new THREE.Vector3();
+    camera.getWorldDirection(cameraDirection);
+    cameraDirection.y = 0; // Remove vertical component
+    cameraDirection.normalize();
+    
+    const rightDirection = new THREE.Vector3();
+    rightDirection.crossVectors(cameraDirection, camera.up).normalize();
+    
+    // Calculate input magnitude for precision mode
+    let inputMagnitude = 0;
+    if (inputState.forward) inputMagnitude += 1;
+    if (inputState.backward) inputMagnitude += 1;
+    if (inputState.left) inputMagnitude += 1;
+    if (inputState.right) inputMagnitude += 1;
+    
+    playerPhysics.inputMagnitude = inputMagnitude;
+    playerPhysics.precisionMode = inputMagnitude > 0 && playerPhysics.isGrounded;
+    
+    // Apply input forces with enhanced responsiveness
+    const accelerationMultiplier = playerPhysics.precisionMode ? 1.2 : 1.0;
+    const baseAcceleration = PHYSICS_CONFIG.acceleration * accelerationMultiplier;
+    
+    if (inputState.forward) {
+        playerPhysics.inputForce.add(cameraDirection.clone().multiplyScalar(baseAcceleration));
+        playerPhysics.lastInputTime = currentTime;
+    }
+    if (inputState.backward) {
+        playerPhysics.inputForce.add(cameraDirection.clone().multiplyScalar(-baseAcceleration));
+        playerPhysics.lastInputTime = currentTime;
+    }
+    if (inputState.left) {
+        playerPhysics.inputForce.add(rightDirection.clone().multiplyScalar(-baseAcceleration));
+        playerPhysics.lastInputTime = currentTime;
+    }
+    if (inputState.right) {
+        playerPhysics.inputForce.add(rightDirection.clone().multiplyScalar(baseAcceleration));
+        playerPhysics.lastInputTime = currentTime;
+    }
+    
+    // Enhanced jump handling with coyote time and jump buffering
+    handleEnhancedJump(inputState, currentTime);
+    
+    // Apply gravity with variable fall speed
+    applyVariableGravity(deltaTime);
+    
+    // Add input force to acceleration
+    playerPhysics.acceleration.add(playerPhysics.inputForce);
+    
+    // Update velocity with acceleration
+    playerPhysics.velocity.add(playerPhysics.acceleration.clone().multiplyScalar(deltaTime));
+    
+    // Apply enhanced friction system
+    applyEnhancedFriction();
+    
+    // Apply terminal velocity
+    if (playerPhysics.velocity.y < -PHYSICS_CONFIG.terminalVelocity) {
+        playerPhysics.velocity.y = -PHYSICS_CONFIG.terminalVelocity;
+    }
+    
+    // Limit maximum horizontal velocity
+    const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+    if (horizontalSpeed > PHYSICS_CONFIG.maxVelocity) {
+        const scale = PHYSICS_CONFIG.maxVelocity / horizontalSpeed;
+        playerPhysics.velocity.x *= scale;
+        playerPhysics.velocity.z *= scale;
+    }
+    
+    // Update position
+    const deltaPosition = playerPhysics.velocity.clone().multiplyScalar(deltaTime);
+    playerPhysics.position.add(deltaPosition);
+    
+    // Ground collision detection
+    checkGroundCollision();
+    
+    // Update movement state
+    updateMovementState();
+    
+    // Update rolling animation
+    updateRollingAnimation();
+    
+    // Update visual player position
+    player.position.copy(playerPhysics.position);
+    
+    // Update legacy grid position for backwards compatibility
+    const worldPos = player.position;
+    playerState.gridX = Math.round((worldPos.x / tileSize) + (gridSize / 2) - 0.5);
+    playerState.gridZ = Math.round((worldPos.z / tileSize) + (gridSize / 2) - 0.5);
+}
+
+// Update movement timers for skill-based features
+function updateMovementTimers(deltaTime) {
+    const currentTime = Date.now() / 1000;
+    
+    // Update coyote timer
+    if (playerPhysics.isGrounded) {
+        playerPhysics.coyoteTimer = PHYSICS_CONFIG.coyoteTime;
+        playerPhysics.lastGroundTime = currentTime;
+        playerPhysics.groundedFrames++;
+        playerPhysics.airTime = 0;
+    } else {
+        playerPhysics.coyoteTimer = Math.max(0, playerPhysics.coyoteTimer - deltaTime);
+        playerPhysics.groundedFrames = 0;
+        playerPhysics.airTime += deltaTime;
+    }
+    
+    // Update jump buffer timer
+    if (playerPhysics.jumpBufferTimer > 0) {
+        playerPhysics.jumpBufferTimer = Math.max(0, playerPhysics.jumpBufferTimer - deltaTime);
+    }
+}
+
+// Enhanced jump handling with coyote time and jump buffering
+function handleEnhancedJump(inputState, currentTime) {
+    // Jump buffering - register jump intent
+    if (inputState.jump && !playerPhysics.jumpRequested) {
+        playerPhysics.jumpBufferTimer = PHYSICS_CONFIG.jumpBufferTime;
+        playerPhysics.jumpRequested = true;
+    }
+    
+    // Clear jump request when button is released
+    if (!inputState.jump) {
+        playerPhysics.jumpRequested = false;
+    }
+    
+    // Execute jump with coyote time
+    const canCoyoteJump = playerPhysics.coyoteTimer > 0 && !playerPhysics.isJumping;
+    const hasJumpBuffer = playerPhysics.jumpBufferTimer > 0;
+    
+    if (hasJumpBuffer && (playerPhysics.isGrounded || canCoyoteJump)) {
+        // Execute jump
+        playerPhysics.velocity.y = PHYSICS_CONFIG.jumpForce;
+        playerPhysics.isJumping = true;
+        playerPhysics.jumpStartTime = currentTime;
+        playerPhysics.jumpBufferTimer = 0;
+        playerPhysics.coyoteTimer = 0;
+        playerPhysics.canJump = false;
+        playerPhysics.isGrounded = false;
+        
+        // Preserve some horizontal momentum
+        const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+        if (horizontalSpeed > 0.1) {
+            const momentumBonus = horizontalSpeed * PHYSICS_CONFIG.momentumPreservation;
+            playerPhysics.velocity.y += momentumBonus * 0.3;
+        }
+        
+        soundManager.play('jump');
+    }
+    
+    // Reset jumping flag when grounded
+    if (playerPhysics.isGrounded && playerPhysics.isJumping) {
+        playerPhysics.isJumping = false;
+    }
+}
+
+// Apply variable gravity for better jump feel
+function applyVariableGravity(deltaTime) {
+    let gravityMultiplier = 1.0;
+    
+    // Fast fall when moving downward
+    if (playerPhysics.velocity.y < 0) {
+        gravityMultiplier = PHYSICS_CONFIG.fallMultiplier;
+    }
+    // Lower gravity for short jumps (when jump button is released early)
+    else if (playerPhysics.velocity.y > 0 && !playerState.inputState.jump && playerPhysics.isJumping) {
+        gravityMultiplier = PHYSICS_CONFIG.lowJumpMultiplier;
+    }
+    
+    // Apply gravity with multiplier
+    const gravity = physicsWorld.gravity.clone().multiplyScalar(gravityMultiplier);
+    playerPhysics.acceleration.copy(gravity);
+}
+
+// Enhanced friction system
+function applyEnhancedFriction() {
+    if (playerPhysics.isGrounded) {
+        // Ground friction with momentum preservation
+        const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+        
+        if (horizontalSpeed > PHYSICS_CONFIG.precisionThreshold) {
+            // Apply ground friction
+            playerPhysics.velocity.x *= PHYSICS_CONFIG.groundFriction;
+            playerPhysics.velocity.z *= PHYSICS_CONFIG.groundFriction;
+            
+            // Apply rolling friction
+            const frictionForce = Math.min(PHYSICS_CONFIG.rollingFriction * horizontalSpeed, horizontalSpeed * 0.1);
+            const frictionDirection = new THREE.Vector3(playerPhysics.velocity.x, 0, playerPhysics.velocity.z).normalize();
+            playerPhysics.velocity.x -= frictionDirection.x * frictionForce;
+            playerPhysics.velocity.z -= frictionDirection.z * frictionForce;
+        } else {
+            // Stop very slow movement for precision
+            playerPhysics.velocity.x *= 0.5;
+            playerPhysics.velocity.z *= 0.5;
+        }
+    } else {
+        // Air friction - very light to preserve momentum
+        playerPhysics.velocity.x *= PHYSICS_CONFIG.airFriction;
+        playerPhysics.velocity.z *= PHYSICS_CONFIG.airFriction;
+    }
+}
+
+// Update movement state for better tracking
+function updateMovementState() {
+    const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+    const verticalSpeed = Math.abs(playerPhysics.velocity.y);
+    
+    if (playerPhysics.isGrounded) {
+        if (horizontalSpeed > 0.1) {
+            playerPhysics.movementState = 'rolling';
+        } else {
+            playerPhysics.movementState = 'idle';
+        }
+    } else {
+        if (playerPhysics.velocity.y > 1.0) {
+            playerPhysics.movementState = 'jumping';
+        } else if (playerPhysics.velocity.y < -1.0) {
+            playerPhysics.movementState = 'falling';
+        } else {
+            playerPhysics.movementState = 'airborne';
+        }
+    }
+}
+
+
+
+// Create Kula World style test level with curved surfaces
+function createKulaWorldTestLevel() {
+    // Create curved ramp - simulated with multiple angled platforms
+    for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 0.8; // Create a curve
+        const x = Math.cos(angle) * 8 + 3;
+        const z = Math.sin(angle) * 8;
+        const y = 1 + Math.sin(angle) * 3;
+        const rotationY = -angle;
+        
+        const platform = createCurvedPlatform(x, y, z, 2.5, 0.3, 2.5, 0, rotationY, 0);
+        addPhysicsSurface(platform);
+    }
+    
+    // Create spiral ramp
+    for (let i = 0; i < 16; i++) {
+        const angle = (i / 16) * Math.PI * 3; // 1.5 full rotations
+        const radius = 6;
+        const x = Math.cos(angle) * radius - 8;
+        const z = Math.sin(angle) * radius;
+        const y = 1 + i * 0.4;
+        
+        const platform = createCurvedPlatform(x, y, z, 2, 0.3, 2, 0, 0, 0);
+        addPhysicsSurface(platform);
+    }
+    
+    // Create angled platforms at different heights
+    createAngledPlatform(12, 3, 0, 4, 0.5, 4, Math.PI / 6, 0, 0);
+    createAngledPlatform(-12, 5, 5, 4, 0.5, 4, -Math.PI / 8, 0, Math.PI / 4);
+    createAngledPlatform(0, 8, -12, 6, 0.5, 3, 0, 0, Math.PI / 3);
+    
+    // Create jumping platforms
+    createCurvedPlatform(-15, 10, 0, 3, 0.5, 3, 0, 0, 0);
+    createCurvedPlatform(15, 12, 8, 3, 0.5, 3, 0, 0, 0);
+    
+    // Create some obstacles
+    createCurvedPlatform(0, 2, 4, 1, 2, 1, 0, 0, 0);
+    createCurvedPlatform(4, 1.5, -2, 1, 1.5, 1, 0, 0, 0);
+    
+    console.log('Kula World test level created with curved surfaces');
+}
+
+
+
+
 
 // Socket.io connection
 const socket = io('http://localhost:3001', {
@@ -231,13 +815,11 @@ function createCoin(gridX, gridZ) {
     coin.gridX = gridX;
     coin.gridZ = gridZ;
     
-    // Generate unique ID for multiplayer sync
-    coin.id = `coin_${gridX}_${gridZ}`;
-    
-    // Add floating animation
+    // Add floating animation and unique ID for multiplayer sync
     coin.userData = {
         originalY: coin.position.y,
-        animationOffset: Math.random() * Math.PI * 2
+        animationOffset: Math.random() * Math.PI * 2,
+        id: `coin_${gridX}_${gridZ}`
     };
     
     worldGroup.add(coin);
@@ -289,10 +871,10 @@ function collectCoin(coin) {
     const index = coins.indexOf(coin);
     if (index > -1) {
         // Send collection event to server for multiplayer sync
-        if (multiplayerState.isConnected && coin.id) {
+        if (multiplayerState.isConnected && coin.userData.id && !gameMode.isSinglePlayer) {
             socket.emit('collectItem', {
                 itemType: 'coin',
-                itemId: coin.id
+                itemId: coin.userData.id
             });
         }
         
@@ -316,6 +898,13 @@ function collectCoin(coin) {
         // Check if all coins collected
         if (coins.length === 0) {
             showAllCoinsCollectedMessage();
+        }
+        
+        // Check for level completion in single player mode
+        if (gameMode.isSinglePlayer && gameScore.coins >= gameScore.requiredCoins && gameScore.hasKey) {
+            setTimeout(() => {
+                checkForAutoLevelCompletion();
+            }, 1000);
         }
     }
 }
@@ -453,29 +1042,52 @@ function updateScoreDisplay(options = {}) {
     // Update coins with animation
     const coinsCountElement = document.getElementById('coins-count');
     const coinsTotalElement = document.getElementById('coins-total');
-    if (coinsCountElement) {
-        const oldValue = parseInt(coinsCountElement.textContent) || 0;
-        const newValue = gameScore.coins;
-        
-        if (newValue !== oldValue) {
-            if (options.animateCoins !== false && newValue > oldValue) {
-                animateCoinCollection(newValue, oldValue);
-                animateNumber('coins-count', oldValue, newValue, 400);
-            } else {
-                coinsCountElement.textContent = newValue;
+    
+    if (gameMode.isSinglePlayer && gameScore.requiredCoins > 0) {
+        // Single player mode: show "Coins: X / Y" format
+        if (coinsCountElement) {
+            const oldValue = parseInt(coinsCountElement.textContent) || 0;
+            const newValue = gameScore.coins;
+            
+            if (newValue !== oldValue) {
+                if (options.animateCoins !== false && newValue > oldValue) {
+                    animateCoinCollection(newValue, oldValue);
+                    animateNumber('coins-count', oldValue, newValue, 400);
+                } else {
+                    coinsCountElement.textContent = newValue;
+                }
             }
         }
-    }
-    
-    if (coinsTotalElement) {
-        const oldTotal = parseInt(coinsTotalElement.textContent) || 0;
-        const newTotal = gameScore.totalCoins;
         
-        if (newTotal !== oldTotal) {
-            if (options.animateCoins !== false) {
-                animateNumber('coins-total', oldTotal, newTotal, 600);
-            } else {
-                coinsTotalElement.textContent = newTotal;
+        if (coinsTotalElement) {
+            coinsTotalElement.textContent = gameScore.requiredCoins;
+        }
+    } else {
+        // Multiplayer mode: show traditional format
+        if (coinsCountElement) {
+            const oldValue = parseInt(coinsCountElement.textContent) || 0;
+            const newValue = gameScore.coins;
+            
+            if (newValue !== oldValue) {
+                if (options.animateCoins !== false && newValue > oldValue) {
+                    animateCoinCollection(newValue, oldValue);
+                    animateNumber('coins-count', oldValue, newValue, 400);
+                } else {
+                    coinsCountElement.textContent = newValue;
+                }
+            }
+        }
+        
+        if (coinsTotalElement) {
+            const oldTotal = parseInt(coinsTotalElement.textContent) || 0;
+            const newTotal = gameScore.totalCoins;
+            
+            if (newTotal !== oldTotal) {
+                if (options.animateCoins !== false) {
+                    animateNumber('coins-total', oldTotal, newTotal, 600);
+                } else {
+                    coinsTotalElement.textContent = newTotal;
+                }
             }
         }
     }
@@ -484,18 +1096,20 @@ function updateScoreDisplay(options = {}) {
     const keyStatusElement = document.getElementById('key-status');
     if (keyStatusElement) {
         const oldKeyStatus = keyStatusElement.textContent;
-        const newKeyStatus = gameScore.hasKey ? '✓' : '✗';
+        const newKeyStatus = gameScore.hasKey ? '✔' : '✗';
         
         if (oldKeyStatus !== newKeyStatus) {
             keyStatusElement.textContent = newKeyStatus;
             
             if (gameScore.hasKey) {
                 keyStatusElement.classList.add('has-key');
+                keyStatusElement.style.color = '#00ff00';
                 if (options.animateKey !== false) {
                     animateKeyCollection();
                 }
             } else {
                 keyStatusElement.classList.remove('has-key');
+                keyStatusElement.style.color = '#ff4444';
             }
         }
     }
@@ -543,9 +1157,139 @@ const teleportTiles = [];
 // Bouncing Platform System
 const bouncingPlatforms = [];
 
+// Broken Tile System
+const brokenTiles = [];
+
+// Static Wall System  
+const staticWalls = [];
+
+// 3D Level System
+const floatingPlatforms = [];
+const movingPlatforms = [];
+const disappearingTiles = [];
+const pressurePlates = [];
+const gravityChangers = [];
+const timedSpikes = [];
+const movingSpikes = [];
+const spiralPlatforms = [];
+const curvedPlatforms = [];
+const angledPlatforms = [];
+const gravityPlanes = [];
+const activePlatformTriggers = new Map();
+
+// Fall detection and respawn system
+const fallDetection = {
+    fallThreshold: -20, // Y coordinate below which player is considered fallen
+    safeSpawnPoints: [],
+    currentSpawnPoint: null,
+    isRespawning: false,
+    respawnDelay: 1000,
+    fallCheckInterval: 100,
+    lastFallCheck: 0
+};
+
+// Level constructor system
+class LevelConstructor {
+    constructor(name, gridSize = 20) {
+        this.name = name;
+        this.gridSize = gridSize;
+        this.platforms = [];
+        this.objects = [];
+        this.gravityPlanes = [];
+        this.safeSpawnPoints = [];
+        this.playerStart = { x: 0, y: 2, z: 0 };
+        this.bounds = {
+            minX: -50, maxX: 50,
+            minY: -30, maxY: 30,
+            minZ: -50, maxZ: 50
+        };
+    }
+
+    // Add a platform to the level
+    addPlatform(type, position, size, options = {}) {
+        const platform = {
+            type: type,
+            position: position,
+            size: size,
+            material: options.material || 'stone',
+            surfaces: options.surfaces || ['top'],
+            ...options
+        };
+        this.platforms.push(platform);
+        return this;
+    }
+
+    // Add an object to the level
+    addObject(type, position, options = {}) {
+        const object = {
+            type: type,
+            position: position,
+            ...options
+        };
+        this.objects.push(object);
+        return this;
+    }
+
+    // Add a gravity plane
+    addGravityPlane(position, normal, strength = 1.0, radius = 10) {
+        this.gravityPlanes.push({
+            position: position,
+            normal: normal,
+            strength: strength,
+            radius: radius
+        });
+        return this;
+    }
+
+    // Add a safe spawn point
+    addSafeSpawnPoint(position, name = '') {
+        this.safeSpawnPoints.push({
+            position: position,
+            name: name,
+            id: `spawn_${this.safeSpawnPoints.length}`
+        });
+        return this;
+    }
+
+    // Set player start position
+    setPlayerStart(position) {
+        this.playerStart = position;
+        return this;
+    }
+
+    // Set level bounds
+    setBounds(bounds) {
+        this.bounds = { ...this.bounds, ...bounds };
+        return this;
+    }
+
+    // Generate the level JSON
+    toJSON() {
+        return {
+            name: this.name,
+            gridSize: this.gridSize,
+            use3D: true,
+            playerStart: this.playerStart,
+            platforms: this.platforms,
+            objects: this.objects,
+            gravityPlanes: this.gravityPlanes,
+            safeSpawnPoints: this.safeSpawnPoints,
+            bounds: this.bounds
+        };
+    }
+}
+
+// Moving Obstacle System
+const movingObstacles = [];
+
+// Tile Type System
+const typedTiles = [];
+let levelTileTypes = null;
+
 // JSON Level System
-const jsonLevels = [];
+let jsonLevels = [];
 let currentJsonLevelIndex = 0;
+let currentLevelIndex = 0; // Global level index for consistent tracking
 let useJsonLevels = false;
 let levelDataLoaded = false;
 
@@ -557,22 +1301,26 @@ const levelSchema = {
     //     "number": 1,
     //     "gridSize": 10,
     //     "playerStart": { "x": 5, "z": 5 },
-    //     "tiles": "auto", // "auto" for checkerboard or custom tile array
+    //     "tiles": "auto", // "auto" for checkerboard or 2D array of tile types
+    //     "tileTypes": [
+    //         ["normal", "normal", "broken", "obstacle"],
+    //         ["normal", "goal", "normal", "normal"],
+    //         // ... more rows
+    //     ],
     //     "objects": [
     //         { "type": "coin", "x": 3, "z": 3 },
     //         { "type": "key", "x": 7, "z": 7 },
-    //         { "type": "goal", "x": 9, "z": 9 },
     //         { "type": "spikeTrap", "x": 4, "z": 6 },
     //         { "type": "teleporter", "x": 2, "z": 2, "pairId": 1, "destination": { "x": 8, "z": 8 } },
     //         { "type": "bouncingPlatform", "x": 5, "z": 3 }
-    //     ],
-    //     "gravityAnchors": [
-    //         { "x": 0, "z": 5, "direction": "left" },
-    //         { "x": 9, "z": 5, "direction": "right" },
-    //         { "x": 5, "z": 0, "direction": "forward" },
-    //         { "x": 5, "z": 9, "direction": "backward" }
     //     ]
     // }
+    // 
+    // Tile Types:
+    // - "normal": Standard walkable tile
+    // - "broken": Tile that breaks when stepped on, causing player to fall and respawn
+    // - "obstacle": Blocks movement completely
+    // - "goal": Triggers level completion when reached (requires key if present)
 };
 
 // Load level data from JSON file
@@ -617,15 +1365,17 @@ async function loadLevelData(levelFile = 'levels.json') {
 
 // Initialize JSON levels
 async function initializeJsonLevels() {
-    const success = await loadLevelData();
+    // Load all levels (existing, programmatic, and modular)
+    const allLevels = await loadAllLevels();
     
-    if (success && jsonLevels.length > 0) {
+    if (allLevels.length > 0) {
+        jsonLevels = allLevels;
         // Automatically switch to JSON mode if levels loaded successfully
         useJsonLevels = true;
-        console.log(`Initialized with ${jsonLevels.length} JSON levels - switching to JSON mode`);
+        console.log(`Initialized with ${jsonLevels.length} levels (including programmatic and modular) - switching to JSON mode`);
         
         // Show mode switch message
-        showMessage('JSON level mode activated - Press ESC for level menu', '#00ccff');
+        showMessage('Enhanced level mode activated - Press ESC for level menu', '#00ccff');
     } else {
         // Fall back to random generation
         useJsonLevels = false;
@@ -636,70 +1386,2136 @@ async function initializeJsonLevels() {
     }
 }
 
+// ============ BROKEN TILES SYSTEM ============
+
+// Create a broken tile at a specific position
+function createBrokenTile(gridX, gridZ) {
+    const tileGeometry = new THREE.BoxGeometry(
+        getConfigValue('gameplay.tileSize', 2), 
+        0.2, 
+        getConfigValue('gameplay.tileSize', 2)
+    );
+    const tileMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0x8B4513, // Brown color to indicate weakness
+        transparent: true,
+        opacity: 0.8
+    });
+    
+    const brokenTile = new THREE.Mesh(tileGeometry, tileMaterial);
+    brokenTile.position.copy(gridToWorld(gridX, gridZ));
+    brokenTile.position.y = -0.1; // Slightly lower than regular tiles
+    brokenTile.castShadow = true;
+    brokenTile.receiveShadow = true;
+    
+    // Store grid position
+    brokenTile.gridX = gridX;
+    brokenTile.gridZ = gridZ;
+    brokenTile.isBroken = false;
+    
+    // Initialize userData with unique ID
+    brokenTile.userData = {
+        id: `broken_tile_${gridX}_${gridZ}`
+    };
+    
+    worldGroup.add(brokenTile);
+    brokenTiles.push(brokenTile);
+    
+    return brokenTile;
+}
+
+// Function to break a tile when stepped on
+function breakTile(tile) {
+    if (tile.isBroken) return;
+    
+    tile.isBroken = true;
+    
+    // Visual breaking animation
+    const breakAnimation = () => {
+        tile.material.opacity -= 0.05;
+        tile.position.y -= 0.02;
+        
+        if (tile.material.opacity > 0) {
+            requestAnimationFrame(breakAnimation);
+        } else {
+            // Remove the tile completely
+            worldGroup.remove(tile);
+            const index = brokenTiles.indexOf(tile);
+            if (index > -1) {
+                brokenTiles.splice(index, 1);
+            }
+        }
+    };
+    
+    // Start breaking animation after a short delay
+    setTimeout(() => {
+        breakAnimation();
+        soundManager.play('trapTrigger'); // Play breaking sound
+    }, 500);
+}
+
+// Check if player stepped on a broken tile
+function checkBrokenTileCollision() {
+    brokenTiles.forEach(tile => {
+        if (tile.isBroken) return;
+        
+        const playerPos = player.position;
+        const tilePos = tile.position;
+        const distance = Math.sqrt(
+            Math.pow(playerPos.x - tilePos.x, 2) + 
+            Math.pow(playerPos.z - tilePos.z, 2)
+        );
+        
+        if (distance < 0.8) { // Close enough to be on the tile
+            breakTile(tile);
+            
+            // Player falls - lose a life
+            setTimeout(() => {
+                damagePlayer();
+                showMessage('You fell through a broken tile!', '#ff6666', 2000);
+            }, 1000);
+        }
+    });
+}
+
+// Check disappearing tile collision
+function checkDisappearingTileCollision() {
+    disappearingTiles.forEach(tile => {
+        if (!tile.userData.isActive || tile.userData.isDisappearing) return;
+        
+        const distance = playerPhysics.position.distanceTo(tile.position);
+        
+        if (distance < 0.8) { // Close enough to trigger
+            triggerDisappearingTile(tile);
+        }
+    });
+}
+
+// Clear all broken tiles
+function clearBrokenTiles() {
+    brokenTiles.forEach(tile => {
+        worldGroup.remove(tile);
+    });
+    brokenTiles.length = 0;
+}
+
+// ============ STATIC WALLS SYSTEM ============
+
+// Create a static wall at a specific position
+function createStaticWall(gridX, gridZ, height = 1) {
+    const wallGeometry = new THREE.BoxGeometry(
+        getConfigValue('gameplay.tileSize', 2), 
+        height, 
+        getConfigValue('gameplay.tileSize', 2)
+    );
+    const wallMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0x666666, // Dark gray color for walls
+        transparent: false
+    });
+    
+    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+    wall.position.copy(gridToWorld(gridX, gridZ));
+    wall.position.y = height / 2; // Center the wall vertically
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    
+    // Store grid position
+    wall.gridX = gridX;
+    wall.gridZ = gridZ;
+    wall.isWall = true;
+    
+    // Initialize userData with unique ID
+    wall.userData = {
+        id: `static_wall_${gridX}_${gridZ}`
+    };
+    
+    worldGroup.add(wall);
+    staticWalls.push(wall);
+    
+    return wall;
+}
+
+// Check if a position is blocked by a wall
+function isPositionBlocked(gridX, gridZ) {
+    return staticWalls.some(wall => 
+        wall.gridX === gridX && wall.gridZ === gridZ
+    );
+}
+
+// Clear all static walls
+function clearStaticWalls() {
+    staticWalls.forEach(wall => {
+        worldGroup.remove(wall);
+    });
+    staticWalls.length = 0;
+}
+
+// ============ MOVING OBSTACLES SYSTEM ============
+
+// Create a moving obstacle with a specific pattern
+function createMovingObstacle(startX, startZ, endX, endZ, speed = 1) {
+    const obstacleGeometry = new THREE.BoxGeometry(1.5, 0.8, 1.5);
+    const obstacleMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0xff4444, // Red color for danger
+        transparent: true,
+        opacity: 0.9
+    });
+    
+    const obstacle = new THREE.Mesh(obstacleGeometry, obstacleMaterial);
+    obstacle.position.copy(gridToWorld(startX, startZ));
+    obstacle.position.y = 0.6;
+    obstacle.castShadow = true;
+    obstacle.receiveShadow = true;
+    
+    // Store movement properties
+    obstacle.startPos = gridToWorld(startX, startZ);
+    obstacle.endPos = gridToWorld(endX, endZ);
+    obstacle.speed = speed;
+    obstacle.direction = 1; // 1 for forward, -1 for backward
+    obstacle.isMoving = true;
+    
+    // Initialize userData with unique ID
+    obstacle.userData = {
+        id: `moving_obstacle_${startX}_${startZ}_${endX}_${endZ}`
+    };
+    
+    worldGroup.add(obstacle);
+    movingObstacles.push(obstacle);
+    
+    return obstacle;
+}
+
+// Update moving obstacles
+function updateMovingObstacles() {
+    movingObstacles.forEach(obstacle => {
+        if (!obstacle.isMoving) return;
+        
+        const currentPos = obstacle.position;
+        const startPos = obstacle.startPos;
+        const endPos = obstacle.endPos;
+        
+        // Calculate movement direction
+        const direction = new THREE.Vector3()
+            .subVectors(endPos, startPos)
+            .normalize()
+            .multiplyScalar(obstacle.speed * obstacle.direction * 0.02);
+        
+        // Move the obstacle
+        obstacle.position.add(direction);
+        
+        // Check if reached destination
+        const distanceToEnd = currentPos.distanceTo(endPos);
+        const distanceToStart = currentPos.distanceTo(startPos);
+        
+        if (obstacle.direction === 1 && distanceToEnd < 0.1) {
+            obstacle.direction = -1; // Reverse direction
+        } else if (obstacle.direction === -1 && distanceToStart < 0.1) {
+            obstacle.direction = 1; // Reverse direction
+        }
+    });
+}
+
+// Check collision with moving obstacles
+function checkMovingObstacleCollision() {
+    movingObstacles.forEach(obstacle => {
+        const playerPos = player.position;
+        const obstaclePos = obstacle.position;
+        const distance = playerPos.distanceTo(obstaclePos);
+        
+        if (distance < 1.2) { // Collision detected
+            damagePlayer();
+            showMessage('Hit by moving obstacle!', '#ff6666', 2000);
+        }
+    });
+}
+
+// Clear all moving obstacles
+function clearMovingObstacles() {
+    movingObstacles.forEach(obstacle => {
+        worldGroup.remove(obstacle);
+    });
+    movingObstacles.length = 0;
+}
+
+// ============ TILE TYPE SYSTEM ============
+
+// Create a tile based on its type
+function createTypedTile(gridX, gridZ, tileType) {
+    const tileGeometry = new THREE.BoxGeometry(
+        getConfigValue('gameplay.tileSize', 2), 
+        0.1, 
+        getConfigValue('gameplay.tileSize', 2)
+    );
+    
+    let tileMaterial;
+    let tileHeight = 0.1;
+    
+    switch(tileType) {
+        case 'normal':
+            tileMaterial = new THREE.MeshLambertMaterial({ 
+                color: (gridX + gridZ) % 2 === 0 ? 0x333333 : 0x555555
+            });
+            break;
+        case 'broken':
+            tileMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x8B4513, // Brown color
+                transparent: true,
+                opacity: 0.8
+            });
+            break;
+        case 'obstacle':
+            tileMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x666666 // Dark gray
+            });
+            tileHeight = 1; // Make obstacles taller
+            break;
+        case 'goal':
+            tileMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0xff6600, // Orange color when locked
+                transparent: true,
+                opacity: 0.8
+            });
+            tileHeight = 0.2; // Slightly elevated to be visible
+            break;
+        default:
+            tileMaterial = new THREE.MeshLambertMaterial({ 
+                color: (gridX + gridZ) % 2 === 0 ? 0x333333 : 0x555555
+            });
+    }
+    
+    const tile = new THREE.Mesh(tileGeometry, tileMaterial);
+    tile.position.copy(gridToWorld(gridX, gridZ));
+    tile.position.y = tileHeight / 2;
+    tile.castShadow = true;
+    tile.receiveShadow = true;
+    
+    // Store tile properties
+    tile.gridX = gridX;
+    tile.gridZ = gridZ;
+    tile.tileType = tileType;
+    tile.isActive = true;
+    
+    // Initialize userData with unique ID
+    tile.userData = {
+        id: `typed_tile_${gridX}_${gridZ}`
+    };
+    
+    // Special properties for broken tiles
+    if (tileType === 'broken') {
+        tile.isBroken = false;
+        tile.originalOpacity = 0.8;
+    }
+    
+    worldGroup.add(tile);
+    typedTiles.push(tile);
+    
+    return tile;
+}
+
+// Load tiles from tileTypes array
+function loadTilesFromTypes(level) {
+    clearTypedTiles();
+    
+    if (!level.tileTypes || level.tiles === 'auto') {
+        // Fall back to auto-generated tiles
+        levelTileTypes = null;
+        return;
+    }
+    
+    levelTileTypes = level.tileTypes;
+    
+    // Validate tileTypes array
+    if (!Array.isArray(levelTileTypes) || levelTileTypes.length === 0) {
+        console.warn('Invalid tileTypes array, falling back to auto tiles');
+        levelTileTypes = null;
+        return;
+    }
+    
+    // Create tiles based on the tileTypes array
+    for (let z = 0; z < levelTileTypes.length; z++) {
+        const row = levelTileTypes[z];
+        if (!Array.isArray(row)) continue;
+        
+        for (let x = 0; x < row.length; x++) {
+            const tileType = row[x];
+            if (tileType) {
+                createTypedTile(x, z, tileType);
+            }
+        }
+    }
+    
+    console.log(`Loaded ${typedTiles.length} typed tiles`);
+}
+
+// Get tile type at a specific position
+function getTileType(gridX, gridZ) {
+    if (!levelTileTypes || !levelTileTypes[gridZ] || !levelTileTypes[gridZ][gridX]) {
+        return 'normal'; // Default to normal tile
+    }
+    
+    return levelTileTypes[gridZ][gridX];
+}
+
+// Check if a position is blocked by an obstacle tile
+function isObstacleTile(gridX, gridZ) {
+    const tileType = getTileType(gridX, gridZ);
+    return tileType === 'obstacle';
+}
+
+// Check if a position is a goal tile
+function isGoalTile(gridX, gridZ) {
+    const tileType = getTileType(gridX, gridZ);
+    return tileType === 'goal';
+}
+
+// Check if a position is a broken tile
+function isBrokenTile(gridX, gridZ) {
+    const tileType = getTileType(gridX, gridZ);
+    return tileType === 'broken';
+}
+
+// Break a tile at a specific position
+function breakTileAt(gridX, gridZ) {
+    const tile = typedTiles.find(t => t.gridX === gridX && t.gridZ === gridZ && t.tileType === 'broken');
+    if (tile && !tile.isBroken) {
+        tile.isBroken = true;
+        
+        // Visual breaking animation
+        const breakAnimation = () => {
+            tile.material.opacity -= 0.05;
+            tile.position.y -= 0.02;
+            
+            if (tile.material.opacity > 0) {
+                requestAnimationFrame(breakAnimation);
+            } else {
+                // Remove the tile completely
+                worldGroup.remove(tile);
+                const index = typedTiles.indexOf(tile);
+                if (index > -1) {
+                    typedTiles.splice(index, 1);
+                }
+            }
+        };
+        
+        // Start breaking animation after a short delay
+        setTimeout(() => {
+            breakAnimation();
+            soundManager.play('trapTrigger'); // Play breaking sound
+        }, 500);
+        
+        return true;
+    }
+    return false;
+}
+
+// Check tile collision for typed tiles
+function checkTypedTileCollision() {
+    if (!levelTileTypes) return;
+    
+    const currentTileType = getTileType(playerState.gridX, playerState.gridZ);
+    
+    switch(currentTileType) {
+        case 'broken':
+            if (isBrokenTile(playerState.gridX, playerState.gridZ)) {
+                if (breakTileAt(playerState.gridX, playerState.gridZ)) {
+                    // Player falls - lose a life
+                    setTimeout(() => {
+                        damagePlayer();
+                        showMessage('You fell through a broken tile!', '#ff6666', 2000);
+                    }, 1000);
+                }
+            }
+            break;
+        case 'goal':
+            if (isGoalTile(playerState.gridX, playerState.gridZ)) {
+                // Check if key is required and if player has it
+                if (gameKey && !gameScore.hasKey) {
+                    showMessage('Goal is locked! Find the key first!', '#ff6666', 2000);
+                } else {
+                    completeLevel();
+                }
+            }
+            break;
+    }
+}
+
+// Update goal tile appearance when key is collected
+function updateGoalTileAppearance() {
+    if (!levelTileTypes) return;
+    
+    typedTiles.forEach(tile => {
+        if (tile.tileType === 'goal') {
+            if (gameScore.hasKey) {
+                tile.material.color.setHex(0x00ff00); // Green when unlocked
+                tile.material.emissive.setHex(0x003300);
+            } else {
+                tile.material.color.setHex(0xff6600); // Orange when locked
+                tile.material.emissive.setHex(0x330000);
+            }
+        }
+    });
+}
+
+// Clear all typed tiles
+function clearTypedTiles() {
+    typedTiles.forEach(tile => {
+        worldGroup.remove(tile);
+    });
+    typedTiles.length = 0;
+}
+
+// ============ 3D PLATFORM SYSTEM ============
+
+// Material library for different platform types
+const PLATFORM_MATERIALS = {
+    stone: { color: 0x808080, roughness: 0.8, metalness: 0.1 },
+    metal: { color: 0x888888, roughness: 0.2, metalness: 0.8 },
+    crystal: { color: 0x44aaff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.8 },
+    wood: { color: 0x8B4513, roughness: 0.9, metalness: 0.0 },
+    energy: { color: 0x00ff88, roughness: 0.0, metalness: 0.0, emissive: 0x002200 }
+};
+
+// Create material from definition
+function createPlatformMaterial(materialType) {
+    const def = PLATFORM_MATERIALS[materialType] || PLATFORM_MATERIALS.stone;
+    return new THREE.MeshStandardMaterial(def);
+}
+
+// Create floating platform
+function createFloatingPlatform(config) {
+    const geometry = new THREE.BoxGeometry(config.size.width, config.size.height, config.size.depth);
+    const material = createPlatformMaterial(config.material);
+    const platform = new THREE.Mesh(geometry, material);
+    
+    platform.position.set(config.position.x, config.position.y, config.position.z);
+    platform.castShadow = true;
+    platform.receiveShadow = true;
+    
+    // Store platform data
+    platform.userData = {
+        type: 'floating',
+        surfaces: config.surfaces || ['top'],
+        id: `floating_${floatingPlatforms.length}`,
+        originalPosition: platform.position.clone(),
+        size: config.size
+    };
+    
+    worldGroup.add(platform);
+    floatingPlatforms.push(platform);
+    
+    // Add to physics surfaces
+    physicsWorld.surfaces.push(platform);
+    
+    return platform;
+}
+
+// Create angled platform - supports both config object and individual parameters
+function createAngledPlatform(configOrX, y, z, width, height, depth, rotX = 0, rotY = 0, rotZ = 0) {
+    let config;
+    
+    // Check if first parameter is a config object or individual parameters
+    if (typeof configOrX === 'object' && configOrX !== null && !Array.isArray(configOrX)) {
+        // Config object mode
+        config = configOrX;
+    } else {
+        // Individual parameters mode - convert to config object
+        config = {
+            position: { x: configOrX, y: y, z: z },
+            size: { width: width, height: height, depth: depth },
+            rotation: { x: rotX * 180 / Math.PI, y: rotY * 180 / Math.PI, z: rotZ * 180 / Math.PI }, // Convert radians to degrees
+            material: 'stone', // Default material
+            surfaces: ['top']
+        };
+    }
+    
+    const geometry = new THREE.BoxGeometry(config.size.width, config.size.height, config.size.depth);
+    const material = createPlatformMaterial ? createPlatformMaterial(config.material) : new THREE.MeshLambertMaterial({ color: 0x8e44ad });
+    const platform = new THREE.Mesh(geometry, material);
+    
+    platform.position.set(config.position.x, config.position.y, config.position.z);
+    
+    // Apply rotation
+    if (config.rotation) {
+        platform.rotation.x = THREE.MathUtils.degToRad(config.rotation.x || 0);
+        platform.rotation.y = THREE.MathUtils.degToRad(config.rotation.y || 0);
+        platform.rotation.z = THREE.MathUtils.degToRad(config.rotation.z || 0);
+    }
+    
+    platform.castShadow = true;
+    platform.receiveShadow = true;
+    
+    // Store platform data
+    platform.userData = {
+        type: 'angled',
+        surfaces: config.surfaces || ['top'],
+        id: `angled_${angledPlatforms.length}`,
+        originalPosition: platform.position.clone(),
+        originalRotation: platform.rotation.clone(),
+        size: config.size
+    };
+    
+    worldGroup.add(platform);
+    angledPlatforms.push(platform);
+    
+    // Add to physics surfaces - check if physicsWorld exists
+    if (typeof physicsWorld !== 'undefined' && physicsWorld.surfaces) {
+        physicsWorld.surfaces.push(platform);
+    }
+    
+    // Also add to physics surface using the old method if available
+    if (typeof addPhysicsSurface === 'function') {
+        addPhysicsSurface(platform);
+    }
+    
+    return platform;
+}
+
+// Create curved platform - supports both config object and individual parameters
+function createCurvedPlatform(configOrX, y, z, width, height, depth, rotX = 0, rotY = 0, rotZ = 0) {
+    let config;
+    
+    // Check if first parameter is a config object or individual parameters
+    if (typeof configOrX === 'object' && configOrX !== null && !Array.isArray(configOrX)) {
+        // Config object mode
+        config = configOrX;
+    } else {
+        // Individual parameters mode - convert to config object
+        config = {
+            position: { x: configOrX, y: y, z: z },
+            size: { width: width, height: height, depth: depth },
+            rotation: { x: rotX * 180 / Math.PI, y: rotY * 180 / Math.PI, z: rotZ * 180 / Math.PI }, // Convert radians to degrees
+            material: 'stone', // Default material
+            surfaces: ['top']
+        };
+    }
+    
+    const curvature = config.curvature || { type: 'cylinder', radius: 4, segments: 16 };
+    let geometry;
+    
+    if (curvature.type === 'cylinder') {
+        geometry = new THREE.CylinderGeometry(
+            curvature.radius, 
+            curvature.radius, 
+            config.size.height, 
+            curvature.segments, 
+            1, 
+            false, 
+            0, 
+            Math.PI
+        );
+    } else {
+        // Fallback to box geometry
+        geometry = new THREE.BoxGeometry(config.size.width, config.size.height, config.size.depth);
+    }
+    
+    const material = createPlatformMaterial ? createPlatformMaterial(config.material) : new THREE.MeshLambertMaterial({ color: 0x4a90e2 });
+    const platform = new THREE.Mesh(geometry, material);
+    
+    platform.position.set(config.position.x, config.position.y, config.position.z);
+    
+    // Apply rotation if provided
+    if (config.rotation) {
+        platform.rotation.x = THREE.MathUtils.degToRad(config.rotation.x || 0);
+        platform.rotation.y = THREE.MathUtils.degToRad(config.rotation.y || 0);
+        platform.rotation.z = THREE.MathUtils.degToRad(config.rotation.z || 0);
+    }
+    
+    platform.castShadow = true;
+    platform.receiveShadow = true;
+    
+    // Store platform data
+    platform.userData = {
+        type: 'curved',
+        surfaces: config.surfaces || ['top'],
+        id: `curved_${curvedPlatforms.length}`,
+        originalPosition: platform.position.clone(),
+        curvature: curvature,
+        size: config.size
+    };
+    
+    worldGroup.add(platform);
+    curvedPlatforms.push(platform);
+    
+    // Add to physics surfaces - check if physicsWorld exists
+    if (typeof physicsWorld !== 'undefined' && physicsWorld.surfaces) {
+        physicsWorld.surfaces.push(platform);
+    }
+    
+    return platform;
+}
+
+// Create spiral platform
+function createSpiralPlatform(config) {
+    const spiral = config.spiral || { turns: 2, segments: 32, innerRadius: 1, outerRadius: 4 };
+    const group = new THREE.Group();
+    
+    // Create spiral path
+    const points = [];
+    for (let i = 0; i <= spiral.segments; i++) {
+        const angle = (i / spiral.segments) * spiral.turns * Math.PI * 2;
+        const radius = spiral.innerRadius + (spiral.outerRadius - spiral.innerRadius) * (i / spiral.segments);
+        const height = (i / spiral.segments) * config.size.height;
+        
+        points.push(new THREE.Vector3(
+            Math.cos(angle) * radius,
+            height,
+            Math.sin(angle) * radius
+        ));
+    }
+    
+    // Create platform segments along spiral
+    for (let i = 0; i < points.length - 1; i++) {
+        const segmentGeometry = new THREE.BoxGeometry(0.8, 0.2, 0.8);
+        const segmentMaterial = createPlatformMaterial(config.material);
+        const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+        
+        segment.position.copy(points[i]);
+        segment.castShadow = true;
+        segment.receiveShadow = true;
+        
+        group.add(segment);
+    }
+    
+    group.position.set(config.position.x, config.position.y, config.position.z);
+    
+    // Store platform data
+    group.userData = {
+        type: 'spiral',
+        surfaces: config.surfaces || ['top'],
+        id: `spiral_${spiralPlatforms.length}`,
+        originalPosition: group.position.clone(),
+        spiral: spiral,
+        size: config.size
+    };
+    
+    worldGroup.add(group);
+    spiralPlatforms.push(group);
+    
+    // Add each segment to physics surfaces
+    group.children.forEach(segment => {
+        physicsWorld.surfaces.push(segment);
+    });
+    
+    return group;
+}
+
+// Create moving platform
+function createMovingPlatform(config) {
+    const geometry = new THREE.BoxGeometry(config.size.width, config.size.height, config.size.depth);
+    const material = createPlatformMaterial(config.material);
+    const platform = new THREE.Mesh(geometry, material);
+    
+    platform.position.set(config.position.x, config.position.y, config.position.z);
+    platform.castShadow = true;
+    platform.receiveShadow = true;
+    
+    // Store platform data
+    platform.userData = {
+        type: 'moving',
+        surfaces: config.surfaces || ['top'],
+        id: `moving_${movingPlatforms.length}`,
+        originalPosition: platform.position.clone(),
+        size: config.size,
+        movement: config.movement,
+        pathIndex: 0,
+        pathProgress: 0,
+        isMoving: true
+    };
+    
+    worldGroup.add(platform);
+    movingPlatforms.push(platform);
+    
+    // Add to physics surfaces
+    physicsWorld.surfaces.push(platform);
+    
+    return platform;
+}
+
+// Update moving platforms
+function updateMovingPlatforms() {
+    movingPlatforms.forEach(platform => {
+        if (!platform.userData.isMoving) return;
+        
+        const movement = platform.userData.movement;
+        const deltaTime = 1/60; // Fixed timestep
+        
+        if (movement.type === 'linear') {
+            // Linear path movement
+            const path = movement.path;
+            const pathIndex = platform.userData.pathIndex;
+            const pathProgress = platform.userData.pathProgress;
+            
+            if (path.length < 2) return;
+            
+            const currentPoint = path[pathIndex];
+            const nextPoint = path[(pathIndex + 1) % path.length];
+            
+            // Calculate distance and direction
+            const distance = Math.sqrt(
+                Math.pow(nextPoint.x - currentPoint.x, 2) +
+                Math.pow(nextPoint.y - currentPoint.y, 2) +
+                Math.pow(nextPoint.z - currentPoint.z, 2)
+            );
+            
+            const speed = movement.speed || 1;
+            const progressDelta = (speed * deltaTime) / distance;
+            
+            // Update progress
+            platform.userData.pathProgress += progressDelta;
+            
+            if (platform.userData.pathProgress >= 1) {
+                platform.userData.pathProgress = 0;
+                platform.userData.pathIndex = (pathIndex + 1) % path.length;
+                
+                if (!movement.loop && platform.userData.pathIndex === 0) {
+                    platform.userData.isMoving = false;
+                    return;
+                }
+            }
+            
+            // Interpolate position
+            const t = platform.userData.pathProgress;
+            platform.position.x = currentPoint.x + (nextPoint.x - currentPoint.x) * t;
+            platform.position.y = currentPoint.y + (nextPoint.y - currentPoint.y) * t;
+            platform.position.z = currentPoint.z + (nextPoint.z - currentPoint.z) * t;
+            
+        } else if (movement.type === 'circular') {
+            // Circular movement
+            const center = movement.center;
+            const radius = movement.radius || 3;
+            const speed = movement.speed || 1;
+            const axis = movement.axis || 'y';
+            
+            const time = Date.now() * 0.001 * speed;
+            
+            if (axis === 'y') {
+                platform.position.x = center.x + Math.cos(time) * radius;
+                platform.position.z = center.z + Math.sin(time) * radius;
+                platform.position.y = center.y;
+            } else if (axis === 'x') {
+                platform.position.y = center.y + Math.cos(time) * radius;
+                platform.position.z = center.z + Math.sin(time) * radius;
+                platform.position.x = center.x;
+            } else if (axis === 'z') {
+                platform.position.x = center.x + Math.cos(time) * radius;
+                platform.position.y = center.y + Math.sin(time) * radius;
+                platform.position.z = center.z;
+            }
+        }
+    });
+}
+
+// Clear all 3D platforms
+function clearAllPlatforms() {
+    const platformArrays = [
+        floatingPlatforms,
+        movingPlatforms,
+        disappearingTiles,
+        pressurePlates,
+        gravityChangers,
+        timedSpikes,
+        movingSpikes,
+        spiralPlatforms,
+        curvedPlatforms,
+        angledPlatforms
+    ];
+    
+    platformArrays.forEach(array => {
+        array.forEach(platform => {
+            worldGroup.remove(platform);
+            // Remove from physics surfaces
+            const index = physicsWorld.surfaces.indexOf(platform);
+            if (index > -1) {
+                physicsWorld.surfaces.splice(index, 1);
+            }
+        });
+        array.length = 0;
+    });
+    
+    gravityPlanes.length = 0;
+    activePlatformTriggers.clear();
+}
+
+// ============ ENHANCED TRAP SYSTEM ============
+
+// Create disappearing tile
+function createDisappearingTile(config) {
+    const geometry = new THREE.BoxGeometry(config.size.width, config.size.height, config.size.depth);
+    const material = new THREE.MeshStandardMaterial({ 
+        color: 0xff8800, 
+        transparent: true, 
+        opacity: 0.7,
+        roughness: 0.5
+    });
+    const tile = new THREE.Mesh(geometry, material);
+    
+    tile.position.set(config.position.x, config.position.y, config.position.z);
+    tile.castShadow = true;
+    tile.receiveShadow = true;
+    
+    // Store tile data
+    tile.userData = {
+        type: 'disappearing',
+        id: `disappearing_${disappearingTiles.length}`,
+        originalPosition: tile.position.clone(),
+        size: config.size,
+        delay: config.delay || 1000,
+        duration: config.duration || 3000,
+        isActive: true,
+        isDisappearing: false,
+        disappearTimer: null,
+        reappearTimer: null,
+        originalMaterial: material.clone()
+    };
+    
+    worldGroup.add(tile);
+    disappearingTiles.push(tile);
+    
+    // Add to physics surfaces
+    physicsWorld.surfaces.push(tile);
+    
+    return tile;
+}
+
+// Trigger disappearing tile
+function triggerDisappearingTile(tile) {
+    if (!tile.userData.isActive || tile.userData.isDisappearing) return;
+    
+    tile.userData.isDisappearing = true;
+    
+    // Visual warning effect
+    const warningAnimation = () => {
+        tile.material.color.setHex(0xff0000);
+        tile.material.opacity = 0.5;
+        
+        setTimeout(() => {
+            if (tile.userData.isDisappearing) {
+                tile.material.color.setHex(0xff8800);
+                tile.material.opacity = 0.7;
+            }
+        }, 200);
+    };
+    
+    // Flash warning
+    const flashCount = Math.floor(tile.userData.delay / 400);
+    for (let i = 0; i < flashCount; i++) {
+        setTimeout(warningAnimation, i * 400);
+    }
+    
+    // Disappear after delay
+    tile.userData.disappearTimer = setTimeout(() => {
+        tile.userData.isActive = false;
+        tile.visible = false;
+        
+        // Remove from physics surfaces
+        const index = physicsWorld.surfaces.indexOf(tile);
+        if (index > -1) {
+            physicsWorld.surfaces.splice(index, 1);
+        }
+        
+        // Reappear after duration
+        tile.userData.reappearTimer = setTimeout(() => {
+            tile.userData.isActive = true;
+            tile.userData.isDisappearing = false;
+            tile.visible = true;
+            tile.material.color.copy(tile.userData.originalMaterial.color);
+            tile.material.opacity = tile.userData.originalMaterial.opacity;
+            
+            // Re-add to physics surfaces
+            physicsWorld.surfaces.push(tile);
+        }, tile.userData.duration);
+        
+    }, tile.userData.delay);
+}
+
+// Create pressure plate
+function createPressurePlate(config) {
+    const geometry = new THREE.BoxGeometry(config.size.width, config.size.height, config.size.depth);
+    const material = new THREE.MeshStandardMaterial({ 
+        color: 0x444444, 
+        metalness: 0.8,
+        roughness: 0.2
+    });
+    const plate = new THREE.Mesh(geometry, material);
+    
+    plate.position.set(config.position.x, config.position.y, config.position.z);
+    plate.castShadow = true;
+    plate.receiveShadow = true;
+    
+    // Store plate data
+    plate.userData = {
+        type: 'pressurePlate',
+        id: `pressure_${pressurePlates.length}`,
+        originalPosition: plate.position.clone(),
+        size: config.size,
+        triggers: config.triggers || [],
+        isPressed: false,
+        pressDistance: 0.8,
+        activationColor: 0x00ff00,
+        originalColor: 0x444444
+    };
+    
+    worldGroup.add(plate);
+    pressurePlates.push(plate);
+    
+    // Add to physics surfaces
+    physicsWorld.surfaces.push(plate);
+    
+    return plate;
+}
+
+// Check pressure plate activation
+function checkPressurePlates() {
+    pressurePlates.forEach(plate => {
+        const distance = playerPhysics.position.distanceTo(plate.position);
+        const wasPressed = plate.userData.isPressed;
+        const isPressed = distance < plate.userData.pressDistance;
+        
+        if (isPressed !== wasPressed) {
+            plate.userData.isPressed = isPressed;
+            
+            // Visual feedback
+            plate.material.color.setHex(isPressed ? 
+                plate.userData.activationColor : 
+                plate.userData.originalColor
+            );
+            
+            // Trigger actions
+            if (isPressed) {
+                plate.userData.triggers.forEach(trigger => {
+                    executeTriggerAction(trigger);
+                });
+                soundManager.play('pressurePlate');
+            }
+        }
+    });
+}
+
+// Execute trigger action
+function executeTriggerAction(trigger) {
+    switch (trigger.type) {
+        case 'platform':
+            const platform = findPlatformById(trigger.target);
+            if (platform) {
+                if (trigger.action === 'activate') {
+                    platform.userData.isActive = true;
+                    platform.visible = true;
+                    if (!physicsWorld.surfaces.includes(platform)) {
+                        physicsWorld.surfaces.push(platform);
+                    }
+                } else if (trigger.action === 'deactivate') {
+                    platform.userData.isActive = false;
+                    platform.visible = false;
+                    const index = physicsWorld.surfaces.indexOf(platform);
+                    if (index > -1) {
+                        physicsWorld.surfaces.splice(index, 1);
+                    }
+                }
+            }
+            break;
+        case 'door':
+            // Future implementation for doors
+            break;
+        case 'gravity':
+            // Future implementation for gravity changes
+            break;
+    }
+}
+
+// Find platform by ID
+function findPlatformById(id) {
+    const allPlatforms = [
+        ...floatingPlatforms,
+        ...movingPlatforms,
+        ...angledPlatforms,
+        ...curvedPlatforms,
+        ...spiralPlatforms
+    ];
+    
+    return allPlatforms.find(platform => platform.userData.id === id);
+}
+
+// Create timed spike
+function createTimedSpike(config) {
+    const geometry = new THREE.ConeGeometry(0.2, config.size.height, 8);
+    const material = new THREE.MeshStandardMaterial({ 
+        color: 0xff0000,
+        metalness: 0.8,
+        roughness: 0.2
+    });
+    const spike = new THREE.Mesh(geometry, material);
+    
+    spike.position.set(config.position.x, config.position.y, config.position.z);
+    spike.castShadow = true;
+    spike.receiveShadow = true;
+    
+    // Store spike data
+    spike.userData = {
+        type: 'timedSpike',
+        id: `timed_spike_${timedSpikes.length}`,
+        originalPosition: spike.position.clone(),
+        size: config.size,
+        timing: config.timing,
+        isActive: false,
+        damageRadius: 0.8,
+        startTime: Date.now() + (config.timing.offset || 0)
+    };
+    
+    worldGroup.add(spike);
+    timedSpikes.push(spike);
+    
+    return spike;
+}
+
+// Update timed spikes
+function updateTimedSpikes() {
+    timedSpikes.forEach(spike => {
+        const timing = spike.userData.timing;
+        const elapsed = Date.now() - spike.userData.startTime;
+        const cycle = timing.interval + timing.duration;
+        const cycleProgress = elapsed % cycle;
+        
+        const shouldBeActive = cycleProgress < timing.duration;
+        
+        if (shouldBeActive !== spike.userData.isActive) {
+            spike.userData.isActive = shouldBeActive;
+            
+            // Visual feedback
+            spike.material.color.setHex(shouldBeActive ? 0xff4444 : 0xff0000);
+            spike.material.emissive.setHex(shouldBeActive ? 0x220000 : 0x000000);
+            
+            // Scale animation
+            const targetScale = shouldBeActive ? 1.2 : 1.0;
+            spike.scale.setScalar(targetScale);
+            
+            if (shouldBeActive) {
+                soundManager.play('trapTrigger');
+            }
+        }
+        
+        // Check for player damage
+        if (spike.userData.isActive) {
+            const distance = playerPhysics.position.distanceTo(spike.position);
+            if (distance < spike.userData.damageRadius) {
+                damagePlayer();
+            }
+        }
+    });
+}
+
+// Create moving spike
+function createMovingSpike(config) {
+    const geometry = new THREE.ConeGeometry(0.2, config.size.height, 8);
+    const material = new THREE.MeshStandardMaterial({ 
+        color: 0xff0000,
+        metalness: 0.8,
+        roughness: 0.2
+    });
+    const spike = new THREE.Mesh(geometry, material);
+    
+    spike.position.set(config.position.x, config.position.y, config.position.z);
+    spike.castShadow = true;
+    spike.receiveShadow = true;
+    
+    // Store spike data
+    spike.userData = {
+        type: 'movingSpike',
+        id: `moving_spike_${movingSpikes.length}`,
+        originalPosition: spike.position.clone(),
+        size: config.size,
+        movement: config.movement,
+        pathIndex: 0,
+        pathProgress: 0,
+        isMoving: true,
+        damageRadius: 0.8
+    };
+    
+    worldGroup.add(spike);
+    movingSpikes.push(spike);
+    
+    return spike;
+}
+
+// Update moving spikes
+function updateMovingSpikes() {
+    movingSpikes.forEach(spike => {
+        if (!spike.userData.isMoving) return;
+        
+        const movement = spike.userData.movement;
+        const deltaTime = 1/60; // Fixed timestep
+        
+        if (movement.type === 'linear') {
+            // Linear path movement (same as moving platforms)
+            const path = movement.path;
+            const pathIndex = spike.userData.pathIndex;
+            const pathProgress = spike.userData.pathProgress;
+            
+            if (path.length < 2) return;
+            
+            const currentPoint = path[pathIndex];
+            const nextPoint = path[(pathIndex + 1) % path.length];
+            
+            const distance = Math.sqrt(
+                Math.pow(nextPoint.x - currentPoint.x, 2) +
+                Math.pow(nextPoint.y - currentPoint.y, 2) +
+                Math.pow(nextPoint.z - currentPoint.z, 2)
+            );
+            
+            const speed = movement.speed || 1;
+            const progressDelta = (speed * deltaTime) / distance;
+            
+            spike.userData.pathProgress += progressDelta;
+            
+            if (spike.userData.pathProgress >= 1) {
+                spike.userData.pathProgress = 0;
+                spike.userData.pathIndex = (pathIndex + 1) % path.length;
+                
+                if (!movement.loop && spike.userData.pathIndex === 0) {
+                    spike.userData.isMoving = false;
+                    return;
+                }
+            }
+            
+            // Interpolate position
+            const t = spike.userData.pathProgress;
+            spike.position.x = currentPoint.x + (nextPoint.x - currentPoint.x) * t;
+            spike.position.y = currentPoint.y + (nextPoint.y - currentPoint.y) * t;
+            spike.position.z = currentPoint.z + (nextPoint.z - currentPoint.z) * t;
+        }
+        
+        // Check for player damage
+        const distance = playerPhysics.position.distanceTo(spike.position);
+        if (distance < spike.userData.damageRadius) {
+            damagePlayer();
+        }
+    });
+}
+
+// Create gravity changer
+function createGravityChanger(config) {
+    const geometry = new THREE.BoxGeometry(config.size.width, config.size.height, config.size.depth);
+    const material = new THREE.MeshStandardMaterial({ 
+        color: 0x8800ff,
+        transparent: true,
+        opacity: 0.6,
+        emissive: 0x220088
+    });
+    const changer = new THREE.Mesh(geometry, material);
+    
+    changer.position.set(config.position.x, config.position.y, config.position.z);
+    changer.castShadow = true;
+    changer.receiveShadow = true;
+    
+    // Store changer data
+    changer.userData = {
+        type: 'gravityChanger',
+        id: `gravity_${gravityChangers.length}`,
+        originalPosition: changer.position.clone(),
+        size: config.size,
+        newGravity: config.newGravity,
+        duration: config.duration || 5000,
+        activationDistance: 0.8,
+        isActive: false
+    };
+    
+    worldGroup.add(changer);
+    gravityChangers.push(changer);
+    
+    // Add to physics surfaces
+    physicsWorld.surfaces.push(changer);
+    
+    return changer;
+}
+
+// Check gravity changers
+function checkGravityChangers() {
+    gravityChangers.forEach(changer => {
+        const distance = playerPhysics.position.distanceTo(changer.position);
+        
+        if (distance < changer.userData.activationDistance && !changer.userData.isActive) {
+            changer.userData.isActive = true;
+            
+            // Change gravity temporarily
+            const oldGravity = physicsWorld.gravity.clone();
+            physicsWorld.gravity.set(
+                changer.userData.newGravity.x * PHYSICS_CONFIG.gravity,
+                changer.userData.newGravity.y * PHYSICS_CONFIG.gravity,
+                changer.userData.newGravity.z * PHYSICS_CONFIG.gravity
+            );
+            
+            // Visual effect
+            changer.material.color.setHex(0x00ffff);
+            changer.material.emissive.setHex(0x004488);
+            
+            // Restore gravity after duration
+            setTimeout(() => {
+                physicsWorld.gravity.copy(oldGravity);
+                changer.userData.isActive = false;
+                changer.material.color.setHex(0x8800ff);
+                changer.material.emissive.setHex(0x220088);
+            }, changer.userData.duration);
+            
+            soundManager.play('gravityShift');
+            showMessage('Gravity changed!', '#8800ff', 2000);
+        }
+    });
+}
+
+// ============ FALL DETECTION & RESPAWN SYSTEM ============
+
+// Initialize fall detection for a level
+function initializeFallDetection(levelData) {
+    console.log('🛡️ Initializing fall detection...');
+    
+    // Initialize safe spawn points with validation
+    fallDetection.safeSpawnPoints = [];
+    if (levelData.safeSpawnPoints && Array.isArray(levelData.safeSpawnPoints)) {
+        levelData.safeSpawnPoints.forEach((spawn, index) => {
+            if (spawn && spawn.position) {
+                const validatedSpawn = {
+                    position: validatePosition(spawn.position, { x: 0, y: 2, z: 0 }, `spawn point ${index}`),
+                    name: spawn.name || `Spawn ${index}`,
+                    id: spawn.id || `spawn_${index}`
+                };
+                fallDetection.safeSpawnPoints.push(validatedSpawn);
+                console.log(`🛡️ Added validated spawn point: ${validatedSpawn.name}`, validatedSpawn.position);
+            }
+        });
+    }
+    
+    fallDetection.fallThreshold = levelData.bounds?.minY || -20;
+    fallDetection.currentSpawnPoint = null;
+    fallDetection.isRespawning = false;
+    
+    // Set initial spawn point
+    if (fallDetection.safeSpawnPoints.length > 0) {
+        fallDetection.currentSpawnPoint = fallDetection.safeSpawnPoints[0];
+        console.log('🛡️ Using first safe spawn point:', fallDetection.currentSpawnPoint.name);
+    } else {
+        // Create default spawn point at player start
+        const playerStart = levelData.playerStart || { x: 0, y: 2, z: 0 };
+        fallDetection.currentSpawnPoint = {
+            position: validatePosition(playerStart, { x: 0, y: 2, z: 0 }, 'default spawn point'),
+            name: 'Start',
+            id: 'spawn_default'
+        };
+        console.log('🛡️ Created default spawn point:', fallDetection.currentSpawnPoint.position);
+    }
+    
+    console.log('🛡️ Fall detection initialized:');
+    console.log('  - Threshold:', fallDetection.fallThreshold);
+    console.log('  - Safe spawn points:', fallDetection.safeSpawnPoints.length);
+    console.log('  - Current spawn point:', fallDetection.currentSpawnPoint.name);
+}
+
+// Check if player has fallen
+function checkFallDetection() {
+    if (fallDetection.isRespawning) return;
+    
+    const now = Date.now();
+    if (now - fallDetection.lastFallCheck < fallDetection.fallCheckInterval) return;
+    fallDetection.lastFallCheck = now;
+    
+    const playerY = playerPhysics.position.y;
+    
+    // Check if player has fallen below threshold
+    if (playerY < fallDetection.fallThreshold) {
+        triggerRespawn('fell');
+        return;
+    }
+    
+    // Check if player is out of bounds
+    const currentLevel = getCurrentLevelData();
+    if (currentLevel && currentLevel.bounds) {
+        const bounds = currentLevel.bounds;
+        const pos = playerPhysics.position;
+        
+        if (pos.x < bounds.minX || pos.x > bounds.maxX ||
+            pos.z < bounds.minZ || pos.z > bounds.maxZ) {
+            triggerRespawn('out_of_bounds');
+            return;
+        }
+    }
+}
+
+// Trigger respawn sequence
+function triggerRespawn(reason = 'unknown') {
+    if (fallDetection.isRespawning) return;
+    
+    fallDetection.isRespawning = true;
+    
+    // Play fall sound
+    soundManager.play('fall');
+    
+    // Show respawn message
+    let message = '';
+    switch (reason) {
+        case 'fell':
+            message = 'You fell! Respawning...';
+            break;
+        case 'out_of_bounds':
+            message = 'Out of bounds! Respawning...';
+            break;
+        case 'damage':
+            message = 'You died! Respawning...';
+            break;
+        default:
+            message = 'Respawning...';
+    }
+    
+    showMessage(message, '#ff6666', fallDetection.respawnDelay);
+    
+    // Create fall effect
+    createFallEffect(playerPhysics.position.clone());
+    
+    // Lose a life
+    if (reason !== 'manual') {
+        damagePlayer();
+    }
+    
+    // Respawn after delay
+    setTimeout(() => {
+        executeRespawn();
+    }, fallDetection.respawnDelay);
+}
+
+// Execute the respawn
+function executeRespawn() {
+    console.log('⚰️ Executing respawn...');
+    
+    // Get spawn position with fallback
+    let spawnPos = { x: 0, y: 2, z: 0 }; // Default fallback
+    
+    if (fallDetection.currentSpawnPoint && fallDetection.currentSpawnPoint.position) {
+        spawnPos = fallDetection.currentSpawnPoint.position;
+        console.log('⚰️ Using spawn point:', spawnPos);
+    } else {
+        console.warn('⚰️ No valid spawn point available, using default:', spawnPos);
+        
+        // Try to find a valid spawn point from the list
+        if (fallDetection.safeSpawnPoints && fallDetection.safeSpawnPoints.length > 0) {
+            for (const spawn of fallDetection.safeSpawnPoints) {
+                if (spawn && spawn.position) {
+                    spawnPos = spawn.position;
+                    fallDetection.currentSpawnPoint = spawn;
+                    console.log('⚰️ Found valid spawn point in list:', spawnPos);
+                    break;
+                }
+            }
+        }
+        
+        // If still no valid spawn point, create default
+        if (!fallDetection.currentSpawnPoint) {
+            fallDetection.currentSpawnPoint = {
+                position: { x: 0, y: 2, z: 0 },
+                name: 'Emergency Default',
+                id: 'emergency_default'
+            };
+            console.log('⚰️ Created emergency default spawn point');
+        }
+    }
+    
+    // Use the safe position setting function
+    setPlayerPosition(spawnPos, 'respawn');
+    
+    // Create spawn effect
+    createSpawnEffect(playerPhysics.position.clone());
+    
+    // Reset respawn flag
+    fallDetection.isRespawning = false;
+    
+    // Play respawn sound
+    soundManager.play('respawn');
+    
+    console.log('⚰️ Player respawned successfully');
+}
+
+// Update current spawn point (checkpoint system)
+function updateSpawnPoint(newSpawnPoint) {
+    fallDetection.currentSpawnPoint = newSpawnPoint;
+    showMessage(`Checkpoint: ${newSpawnPoint.name}`, '#00ff00', 2000);
+    soundManager.play('checkpoint');
+    
+    // Create checkpoint effect
+    createCheckpointEffect(newSpawnPoint.position);
+}
+
+// Create fall effect
+function createFallEffect(position) {
+    // Create red particle burst
+    for (let i = 0; i < 15; i++) {
+        const particleGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+        const particleMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0xff4444,
+            transparent: true,
+            opacity: 0.8
+        });
+        const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+        
+        particle.position.copy(position);
+        worldGroup.add(particle);
+        
+        // Random direction
+        const direction = new THREE.Vector3(
+            (Math.random() - 0.5) * 2,
+            Math.random() * 0.5,
+            (Math.random() - 0.5) * 2
+        ).normalize();
+        
+        // Animate particle
+        const startTime = Date.now();
+        const animateParticle = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = elapsed / 1500; // 1.5 second animation
+            
+            if (progress < 1) {
+                particle.position.add(direction.clone().multiplyScalar(0.02));
+                particle.material.opacity = 0.8 * (1 - progress);
+                requestAnimationFrame(animateParticle);
+            } else {
+                worldGroup.remove(particle);
+            }
+        };
+        animateParticle();
+    }
+}
+
+// Create spawn effect
+function createSpawnEffect(position) {
+    // Create blue particle burst
+    for (let i = 0; i < 20; i++) {
+        const particleGeometry = new THREE.SphereGeometry(0.08, 8, 8);
+        const particleMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x44aaff,
+            transparent: true,
+            opacity: 0.9
+        });
+        const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+        
+        particle.position.copy(position);
+        worldGroup.add(particle);
+        
+        // Upward spiral direction
+        const angle = (i / 20) * Math.PI * 2;
+        const direction = new THREE.Vector3(
+            Math.cos(angle) * 0.5,
+            Math.random() * 2 + 1,
+            Math.sin(angle) * 0.5
+        ).normalize();
+        
+        // Animate particle
+        const startTime = Date.now();
+        const animateParticle = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = elapsed / 2000; // 2 second animation
+            
+            if (progress < 1) {
+                particle.position.add(direction.clone().multiplyScalar(0.03));
+                particle.material.opacity = 0.9 * (1 - progress);
+                requestAnimationFrame(animateParticle);
+            } else {
+                worldGroup.remove(particle);
+            }
+        };
+        animateParticle();
+    }
+}
+
+// Create checkpoint effect
+function createCheckpointEffect(position) {
+    // Create expanding ring effect
+    const ringGeometry = new THREE.TorusGeometry(0.5, 0.05, 8, 16);
+    const ringMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 0.8
+    });
+    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.position.copy(position);
+    ring.position.y += 0.5;
+    ring.rotation.x = Math.PI / 2;
+    worldGroup.add(ring);
+    
+    // Animate ring
+    const startTime = Date.now();
+    const animateRing = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = elapsed / 1000; // 1 second animation
+        
+        if (progress < 1) {
+            const scale = 1 + progress * 2;
+            ring.scale.setScalar(scale);
+            ring.material.opacity = 0.8 * (1 - progress);
+            requestAnimationFrame(animateRing);
+        } else {
+            worldGroup.remove(ring);
+        }
+    };
+    animateRing();
+}
+
+// Helper function to update level index consistently
+function setCurrentLevelIndex(index) {
+    currentLevelIndex = index;
+    currentJsonLevelIndex = index;
+}
+
+// Get current level data
+function getCurrentLevelData() {
+    if (currentLevelIndex >= 0 && currentLevelIndex < jsonLevels.length) {
+        return jsonLevels[currentLevelIndex];
+    }
+    return null;
+}
+
+// Manual respawn function (for testing or emergency)
+function manualRespawn() {
+    triggerRespawn('manual');
+}
+
+// ============ MODULAR LEVEL SYSTEM ============
+
+// Load level from separate JSON file
+async function loadModularLevel(levelName) {
+    try {
+        const response = await fetch(`levels/${levelName}.json`);
+        if (!response.ok) {
+            if (response.status === 404) {
+                console.warn(`Level file not found: levels/${levelName}.json`);
+            } else {
+                console.error(`Failed to load level ${levelName}: HTTP ${response.status}`);
+            }
+            return null;
+        }
+        const levelData = await response.json();
+        console.log(`✅ Loaded modular level: ${levelName}`);
+        return levelData;
+    } catch (error) {
+        console.error(`❌ Error loading modular level ${levelName}:`, error.message);
+        return null;
+    }
+}
+
+// Save level to separate JSON file
+async function saveModularLevel(levelName, levelData) {
+    try {
+        const response = await fetch(`levels/${levelName}.json`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(levelData, null, 2)
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to save level: ${response.status}`);
+        }
+        console.log(`Saved modular level: ${levelName}`);
+        return true;
+    } catch (error) {
+        console.error(`Error saving modular level ${levelName}:`, error);
+        return false;
+    }
+}
+
+// Generate programmatic levels using level constructor
+function generateProgrammaticLevels() {
+    const levels = [];
+    
+    // Level 1: Twisting Tower
+    const twistingTower = new LevelConstructor('Twisting Tower', 30)
+        .setPlayerStart({ x: 0, y: 2, z: 0 })
+        .setBounds({ minX: -30, maxX: 30, minY: -50, maxY: 50, minZ: -30, maxZ: 30 })
+        .addSafeSpawnPoint({ x: 0, y: 2, z: 0 }, 'Start')
+        .addSafeSpawnPoint({ x: 10, y: 12, z: 0 }, 'Mid Tower')
+        .addSafeSpawnPoint({ x: 0, y: 22, z: 10 }, 'High Tower')
+        .addSafeSpawnPoint({ x: -10, y: 32, z: 0 }, 'Top')
+        // Base platform
+        .addPlatform('floating', { x: 0, y: 0, z: 0 }, { width: 8, height: 0.5, depth: 8 }, { material: 'stone' })
+        // Spiral staircase
+        .addPlatform('spiral', { x: 0, y: 0, z: 0 }, { width: 20, height: 40, depth: 20 }, { 
+            material: 'metal',
+            spiral: { turns: 3, segments: 48, innerRadius: 3, outerRadius: 7 }
+        })
+        // Gravity zones at different heights
+        .addGravityPlane({ x: 0, y: 10, z: 0 }, { x: 0, y: 1, z: 0 }, 1.0, 15)
+        .addGravityPlane({ x: 15, y: 20, z: 0 }, { x: -1, y: 0, z: 0 }, 1.0, 8)
+        .addGravityPlane({ x: 0, y: 30, z: 15 }, { x: 0, y: 0, z: -1 }, 1.0, 8)
+        // Rotating platforms
+        .addPlatform('moving', { x: 5, y: 15, z: 5 }, { width: 3, height: 0.5, depth: 3 }, {
+            material: 'energy',
+            movement: { type: 'circular', center: { x: 0, y: 15, z: 0 }, radius: 7, speed: 0.5, axis: 'y' }
+        })
+        .addPlatform('moving', { x: -5, y: 25, z: -5 }, { width: 3, height: 0.5, depth: 3 }, {
+            material: 'energy',
+            movement: { type: 'circular', center: { x: 0, y: 25, z: 0 }, radius: 7, speed: 0.8, axis: 'y' }
+        })
+        // Timing challenges
+        .addObject('disappearingTile', { x: 8, y: 10, z: 0 }, { 
+            size: { width: 2, height: 0.2, depth: 2 }, delay: 2000, duration: 4000 
+        })
+        .addObject('timedSpike', { x: 0, y: 20, z: 8 }, {
+            size: { width: 1, height: 0.8, depth: 1 },
+            timing: { interval: 3000, duration: 1500, offset: 0 }
+        })
+        .addObject('movingSpike', { x: 0, y: 30, z: 0 }, {
+            size: { width: 0.5, height: 1, depth: 0.5 },
+            movement: { type: 'linear', path: [{ x: 0, y: 30, z: 0 }, { x: 0, y: 30, z: 10 }], speed: 2, loop: true }
+        })
+        // Collectibles
+        .addObject('coin', { x: 3, y: 5, z: 3 })
+        .addObject('coin', { x: -3, y: 15, z: -3 })
+        .addObject('coin', { x: 5, y: 25, z: 0 })
+        .addObject('coin', { x: 0, y: 35, z: 5 })
+        .addObject('key', { x: 0, y: 35, z: 10 })
+        .addObject('goal', { x: -10, y: 35, z: 0 });
+    
+    levels.push(twistingTower.toJSON());
+    
+    // Level 2: Gravity Maze
+    const gravityMaze = new LevelConstructor('Gravity Maze', 40)
+        .setPlayerStart({ x: 0, y: 2, z: 0 })
+        .setBounds({ minX: -40, maxX: 40, minY: -30, maxY: 30, minZ: -40, maxZ: 40 })
+        .addSafeSpawnPoint({ x: 0, y: 2, z: 0 }, 'Start')
+        .addSafeSpawnPoint({ x: 20, y: 2, z: 0 }, 'East Wing')
+        .addSafeSpawnPoint({ x: 0, y: 2, z: 20 }, 'North Wing')
+        .addSafeSpawnPoint({ x: -20, y: 2, z: 0 }, 'West Wing')
+        // Central hub
+        .addPlatform('floating', { x: 0, y: 0, z: 0 }, { width: 10, height: 0.5, depth: 10 }, { material: 'stone' })
+        // Four wings with different gravity orientations
+        .addPlatform('floating', { x: 20, y: 0, z: 0 }, { width: 15, height: 0.5, depth: 8 }, { material: 'metal' })
+        .addPlatform('floating', { x: 0, y: 0, z: 20 }, { width: 8, height: 0.5, depth: 15 }, { material: 'crystal' })
+        .addPlatform('floating', { x: -20, y: 0, z: 0 }, { width: 15, height: 0.5, depth: 8 }, { material: 'wood' })
+        .addPlatform('floating', { x: 0, y: 0, z: -20 }, { width: 8, height: 0.5, depth: 15 }, { material: 'energy' })
+        // Gravity zones for each wing
+        .addGravityPlane({ x: 20, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }, 1.2, 12) // East: gravity pulls west
+        .addGravityPlane({ x: 0, y: 0, z: 20 }, { x: 0, y: 0, z: -1 }, 1.2, 12) // North: gravity pulls south
+        .addGravityPlane({ x: -20, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 1.2, 12) // West: gravity pulls east
+        .addGravityPlane({ x: 0, y: 0, z: -20 }, { x: 0, y: 0, z: 1 }, 1.2, 12) // South: gravity pulls north
+        // Connecting bridges
+        .addPlatform('floating', { x: 10, y: 0, z: 0 }, { width: 8, height: 0.3, depth: 2 }, { material: 'metal' })
+        .addPlatform('floating', { x: 0, y: 0, z: 10 }, { width: 2, height: 0.3, depth: 8 }, { material: 'crystal' })
+        .addPlatform('floating', { x: -10, y: 0, z: 0 }, { width: 8, height: 0.3, depth: 2 }, { material: 'wood' })
+        .addPlatform('floating', { x: 0, y: 0, z: -10 }, { width: 2, height: 0.3, depth: 8 }, { material: 'energy' })
+        // Gravity changers to switch between zones
+        .addObject('gravityChanger', { x: 8, y: 1, z: 0 }, {
+            size: { width: 1, height: 0.2, depth: 1 },
+            newGravity: { x: -1, y: 0, z: 0 }, duration: 8000
+        })
+        .addObject('gravityChanger', { x: 0, y: 1, z: 8 }, {
+            size: { width: 1, height: 0.2, depth: 1 },
+            newGravity: { x: 0, y: 0, z: -1 }, duration: 8000
+        })
+        // Traps and challenges
+        .addObject('disappearingTile', { x: 15, y: 1, z: 0 }, { 
+            size: { width: 2, height: 0.2, depth: 2 }, delay: 1000, duration: 3000 
+        })
+        .addObject('pressurePlate', { x: 0, y: 1, z: 15 }, {
+            size: { width: 1, height: 0.1, depth: 1 },
+            triggers: [{ type: 'platform', target: 'bridge_1', action: 'activate' }]
+        })
+        // Collectibles in each wing
+        .addObject('coin', { x: 18, y: 2, z: 0 })
+        .addObject('coin', { x: 0, y: 2, z: 18 })
+        .addObject('coin', { x: -18, y: 2, z: 0 })
+        .addObject('coin', { x: 0, y: 2, z: -18 })
+        .addObject('key', { x: 25, y: 2, z: 0 })
+        .addObject('goal', { x: -25, y: 2, z: 0 });
+    
+    levels.push(gravityMaze.toJSON());
+    
+    // Level 3: Timing Gauntlet
+    const timingGauntlet = new LevelConstructor('Timing Gauntlet', 50)
+        .setPlayerStart({ x: 0, y: 2, z: 0 })
+        .setBounds({ minX: -25, maxX: 25, minY: -20, maxY: 20, minZ: -50, maxZ: 50 })
+        .addSafeSpawnPoint({ x: 0, y: 2, z: 0 }, 'Start')
+        .addSafeSpawnPoint({ x: 0, y: 2, z: 20 }, 'Quarter')
+        .addSafeSpawnPoint({ x: 0, y: 2, z: 40 }, 'Half')
+        .addSafeSpawnPoint({ x: 0, y: 12, z: 45 }, 'Final')
+        // Starting platform
+        .addPlatform('floating', { x: 0, y: 0, z: 0 }, { width: 6, height: 0.5, depth: 6 }, { material: 'stone' })
+        // Moving platform sequence
+        .addPlatform('moving', { x: 0, y: 0, z: 10 }, { width: 4, height: 0.5, depth: 4 }, {
+            material: 'energy',
+            movement: { type: 'linear', path: [{ x: -8, y: 0, z: 10 }, { x: 8, y: 0, z: 10 }], speed: 3, loop: true }
+        })
+        .addPlatform('moving', { x: 0, y: 0, z: 20 }, { width: 3, height: 0.5, depth: 3 }, {
+            material: 'energy',
+            movement: { type: 'circular', center: { x: 0, y: 0, z: 20 }, radius: 6, speed: 1, axis: 'y' }
+        })
+        .addPlatform('moving', { x: 0, y: 0, z: 30 }, { width: 4, height: 0.5, depth: 4 }, {
+            material: 'energy',
+            movement: { type: 'linear', path: [{ x: 0, y: 0, z: 30 }, { x: 0, y: 8, z: 30 }], speed: 2, loop: true }
+        })
+        .addPlatform('moving', { x: 0, y: 8, z: 40 }, { width: 3, height: 0.5, depth: 3 }, {
+            material: 'energy',
+            movement: { type: 'circular', center: { x: 0, y: 8, z: 40 }, radius: 5, speed: 1.5, axis: 'y' }
+        })
+        // Final platform
+        .addPlatform('floating', { x: 0, y: 10, z: 45 }, { width: 8, height: 0.5, depth: 8 }, { material: 'crystal' })
+        // Timing obstacles
+        .addObject('timedSpike', { x: 0, y: 1, z: 15 }, {
+            size: { width: 1, height: 0.8, depth: 1 },
+            timing: { interval: 2000, duration: 1000, offset: 0 }
+        })
+        .addObject('timedSpike', { x: 3, y: 1, z: 25 }, {
+            size: { width: 1, height: 0.8, depth: 1 },
+            timing: { interval: 2500, duration: 1200, offset: 500 }
+        })
+        .addObject('timedSpike', { x: -3, y: 1, z: 35 }, {
+            size: { width: 1, height: 0.8, depth: 1 },
+            timing: { interval: 2000, duration: 800, offset: 1000 }
+        })
+        // Disappearing tiles
+        .addObject('disappearingTile', { x: 0, y: 1, z: 5 }, { 
+            size: { width: 2, height: 0.2, depth: 2 }, delay: 1500, duration: 2000 
+        })
+        .addObject('disappearingTile', { x: 0, y: 1, z: 25 }, { 
+            size: { width: 2, height: 0.2, depth: 2 }, delay: 2000, duration: 2500 
+        })
+        // Collectibles
+        .addObject('coin', { x: 0, y: 2, z: 10 })
+        .addObject('coin', { x: 0, y: 2, z: 20 })
+        .addObject('coin', { x: 0, y: 2, z: 30 })
+        .addObject('coin', { x: 0, y: 9, z: 40 })
+        .addObject('key', { x: 0, y: 11, z: 45 })
+        .addObject('goal', { x: 0, y: 11, z: 50 });
+    
+    levels.push(timingGauntlet.toJSON());
+    
+    return levels;
+}
+
+// Load all available levels (both from files and programmatic)
+async function loadAllLevels() {
+    const allLevels = [];
+    
+    // Load existing levels from levels.json
+    try {
+        const response = await fetch('levels.json');
+        if (response.ok) {
+            const existingLevels = await response.json();
+            allLevels.push(...existingLevels);
+        }
+    } catch (error) {
+        console.warn('Could not load existing levels.json:', error);
+    }
+    
+    // Add programmatic levels
+    const programmaticLevels = generateProgrammaticLevels();
+    allLevels.push(...programmaticLevels);
+    
+    // Try to load modular levels
+    const modularLevelNames = ['advanced-tower', 'gravity-chambers'];
+    for (const levelName of modularLevelNames) {
+        const levelData = await loadModularLevel(levelName);
+        if (levelData) {
+            allLevels.push(levelData);
+            console.log(`✅ Successfully loaded modular level: ${levelName}`);
+        } else {
+            console.warn(`⚠️  Failed to load modular level: ${levelName}`);
+        }
+    }
+    
+    return allLevels;
+}
+
+// ============ GRAVITY ZONES SYSTEM ============
+
+// Update gravity based on player position and active gravity planes
+function updateGravityZones() {
+    if (gravityPlanes.length === 0) return;
+    
+    const playerPos = playerPhysics.position;
+    let activeGravity = new THREE.Vector3(0, PHYSICS_CONFIG.gravity, 0);
+    let strongestInfluence = 0;
+    
+    // Check each gravity plane
+    gravityPlanes.forEach(plane => {
+        const planePos = new THREE.Vector3(plane.position.x, plane.position.y, plane.position.z);
+        const distance = playerPos.distanceTo(planePos);
+        
+        // Check if player is within radius of this gravity plane
+        if (distance < plane.radius) {
+            // Calculate influence based on distance (closer = stronger influence)
+            const influence = (1 - (distance / plane.radius)) * plane.strength;
+            
+            if (influence > strongestInfluence) {
+                strongestInfluence = influence;
+                // Set gravity direction based on plane normal
+                activeGravity.set(
+                    plane.normal.x * PHYSICS_CONFIG.gravity * plane.strength,
+                    plane.normal.y * PHYSICS_CONFIG.gravity * plane.strength,
+                    plane.normal.z * PHYSICS_CONFIG.gravity * plane.strength
+                );
+            }
+        }
+    });
+    
+    // Apply the strongest gravity influence
+    if (strongestInfluence > 0.1) {
+        physicsWorld.gravity.copy(activeGravity);
+        
+        // Visual feedback for gravity change
+        if (strongestInfluence > 0.8) {
+            createGravityZoneEffect(playerPos, activeGravity);
+        }
+    } else {
+        // Reset to default gravity
+        physicsWorld.gravity.set(0, PHYSICS_CONFIG.gravity, 0);
+    }
+}
+
+// Create visual effect for gravity zones
+function createGravityZoneEffect(position, gravityDirection) {
+    // Only create effect occasionally to avoid performance issues
+    if (Math.random() > 0.05) return;
+    
+    const particleGeometry = new THREE.SphereGeometry(0.03, 6, 6);
+    const particleMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0x8800ff,
+        transparent: true,
+        opacity: 0.6
+    });
+    const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+    
+    // Random position around player
+    particle.position.copy(position);
+    particle.position.x += (Math.random() - 0.5) * 2;
+    particle.position.y += (Math.random() - 0.5) * 2;
+    particle.position.z += (Math.random() - 0.5) * 2;
+    
+    worldGroup.add(particle);
+    
+    // Animate particle in gravity direction
+    const direction = gravityDirection.clone().normalize();
+    const startTime = Date.now();
+    
+    const animateParticle = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = elapsed / 1000; // 1 second animation
+        
+        if (progress < 1) {
+            particle.position.add(direction.clone().multiplyScalar(0.02));
+            particle.material.opacity = 0.6 * (1 - progress);
+            requestAnimationFrame(animateParticle);
+        } else {
+            worldGroup.remove(particle);
+        }
+    };
+    animateParticle();
+}
+
+// Check if player is in a specific gravity zone
+function isPlayerInGravityZone(zoneName) {
+    return gravityPlanes.some(plane => {
+        const planePos = new THREE.Vector3(plane.position.x, plane.position.y, plane.position.z);
+        const distance = playerPhysics.position.distanceTo(planePos);
+        return distance < plane.radius && plane.name === zoneName;
+    });
+}
+
+// Get current gravity zone info
+function getCurrentGravityZone() {
+    const playerPos = playerPhysics.position;
+    let closestZone = null;
+    let closestDistance = Infinity;
+    
+    gravityPlanes.forEach((plane, index) => {
+        const planePos = new THREE.Vector3(plane.position.x, plane.position.y, plane.position.z);
+        const distance = playerPos.distanceTo(planePos);
+        
+        if (distance < plane.radius && distance < closestDistance) {
+            closestDistance = distance;
+            closestZone = {
+                index: index,
+                plane: plane,
+                distance: distance,
+                influence: (1 - (distance / plane.radius)) * plane.strength
+            };
+        }
+    });
+    
+    return closestZone;
+}
+
+// ============ CHECKPOINT SYSTEM ============
+
+// Check if player is near a checkpoint
+function checkCheckpoints() {
+    if (fallDetection.safeSpawnPoints.length === 0) return;
+    
+    const playerPos = playerPhysics.position;
+    const checkpointDistance = 2.0; // Distance to activate checkpoint
+    
+    fallDetection.safeSpawnPoints.forEach(spawn => {
+        const spawnPos = new THREE.Vector3(spawn.position.x, spawn.position.y, spawn.position.z);
+        const distance = playerPos.distanceTo(spawnPos);
+        
+        if (distance < checkpointDistance && fallDetection.currentSpawnPoint !== spawn) {
+            updateSpawnPoint(spawn);
+        }
+    });
+}
+
 // Function to load level from JSON
 function loadJsonLevel(levelIndex) {
     if (levelIndex >= jsonLevels.length) {
-        console.log("No more JSON levels, switching to random generation");
+        console.log("📄 No more JSON levels, switching to random generation");
         useJsonLevels = false;
         return false;
     }
     
     const level = jsonLevels[levelIndex];
-    console.log(`Loading JSON level: ${level.name} (${level.number})`);
+    console.log(`📄 Loading JSON level: ${level.name} (${level.number})`);
     
     // Clear existing level
     clearAllCoins();
     clearSpikeTraps();
     clearTeleportTiles();
     clearAllBouncingPlatforms();
+    clearBrokenTiles();
+    clearStaticWalls();
+    clearMovingObstacles();
+    clearTypedTiles();
+    
+    // Clear 3D platforms and objects
+    clearAllPlatforms();
     
     // Update game state
     gameScore.currentLevel = level.number;
     
-    // Set player start position
-    playerStartPosition.gridX = level.playerStart.x;
-    playerStartPosition.gridZ = level.playerStart.z;
-    playerState.gridX = level.playerStart.x;
-    playerState.gridZ = level.playerStart.z;
-    
-    // Reset player position
-    const startPos = gridToWorld(level.playerStart.x, level.playerStart.z);
-    player.position.copy(startPos);
-    player.position.y = 0.55;
-    
-    // Reset player rotation
-    playerState.baseRotation.x = 0;
-    playerState.baseRotation.z = 0;
-    player.rotation.x = 0;
-    player.rotation.y = 0;
-    player.rotation.z = 0;
-    
-    // Load tiles (for now, we'll use auto-generated checkerboard)
-    // In the future, this could support custom tile patterns
-    
-    // Load objects
-    level.objects.forEach(obj => {
-        switch(obj.type) {
-            case 'coin':
-                createCoin(obj.x, obj.z);
-                break;
-            case 'key':
-                createKeyAt(obj.x, obj.z);
-                break;
-            case 'goal':
-                createGoalAt(obj.x, obj.z);
-                break;
-            case 'spikeTrap':
-                createSpikeTrap(obj.x, obj.z);
-                break;
-            case 'teleporter':
-                createTeleportTileAt(obj.x, obj.z, obj.pairId, obj.destination);
-                break;
-            case 'bouncingPlatform':
-                createBouncingPlatform(obj.x, obj.z);
-                break;
+    // Count total coins needed for this level (single player only)
+    if (gameMode.isSinglePlayer) {
+        gameScore.requiredCoins = 0;
+        gameScore.coins = 0;
+        gameScore.hasKey = false;
+        gameScore.levelComplete = false;
+        
+        if (level.objects) {
+            level.objects.forEach(obj => {
+                if (obj.type === 'coin') {
+                    gameScore.requiredCoins++;
+                }
+            });
         }
-    });
+        console.log(`Level ${level.number}: Requires ${gameScore.requiredCoins} coins to complete`);
+    }
+    
+    // Check if this is a 3D level
+    const is3DLevel = level.use3D || false;
+    
+    if (is3DLevel) {
+        // Handle 3D level loading
+        console.log('Loading 3D level with platforms and enhanced objects');
+        
+        // Create platforms
+        if (level.platforms) {
+            level.platforms.forEach(platformConfig => {
+                try {
+                    create3DPlatform(platformConfig);
+                } catch (error) {
+                    console.error('Error creating platform:', platformConfig, error);
+                }
+            });
+        }
+        
+        // Set player start position (3D)
+        const startPos = level.playerStart || { x: 5, z: 5, y: 0 };
+        
+        // Use safe position setting with validation
+        setPlayerPosition({
+            x: startPos.x,
+            y: startPos.y + 1,
+            z: startPos.z
+        }, '3D JSON level loading');
+        
+        // Set up gravity planes
+        if (level.gravityPlanes) {
+            level.gravityPlanes.forEach(plane => {
+                gravityPlanes.push(plane);
+            });
+        }
+        
+        // Initialize fall detection
+        initializeFallDetection(level);
+        
+        // Create 3D objects
+        if (level.objects) {
+            level.objects.forEach(obj => {
+                try {
+                    create3DLevelObject(obj);
+                } catch (error) {
+                    console.error('Error creating 3D object:', obj, error);
+                }
+            });
+        }
+        
+    } else {
+        // Handle traditional 2D level loading
+        // Set player start position
+        playerStartPosition.gridX = level.playerStart.x;
+        playerStartPosition.gridZ = level.playerStart.z;
+        playerState.gridX = level.playerStart.x;
+        playerState.gridZ = level.playerStart.z;
+        
+        // Reset player position
+        const startPos = gridToWorld(level.playerStart.x, level.playerStart.z);
+        
+        // Use safe position setting with validation
+        setPlayerPosition({
+            x: startPos.x,
+            y: 0.55,
+            z: startPos.z
+        }, 'JSON level loading');
+        
+        // Reset player rotation
+        playerState.baseRotation.x = 0;
+        playerState.baseRotation.z = 0;
+        player.rotation.x = 0;
+        player.rotation.y = 0;
+        player.rotation.z = 0;
+        
+        // Load tiles from tileTypes array or use auto-generated tiles
+        loadTilesFromTypes(level);
+        
+        // Load objects
+        level.objects.forEach(obj => {
+            switch(obj.type) {
+                case 'coin':
+                    createCoin(obj.x, obj.z);
+                    break;
+                case 'key':
+                    createKeyAt(obj.x, obj.z);
+                    break;
+                case 'goal':
+                    createGoalAt(obj.x, obj.z);
+                    break;
+                case 'spikeTrap':
+                    createSpikeTrap(obj.x, obj.z);
+                    break;
+                case 'teleporter':
+                    const teleportTile = createTeleportTileAt(obj.x, obj.z, obj.pairId, obj.destination);
+                    if (!teleportTile) {
+                        console.warn(`Failed to create teleporter at (${obj.x}, ${obj.z}) in level "${level.name}"`);
+                    }
+                    break;
+                case 'bouncingPlatform':
+                    createBouncingPlatform(obj.x, obj.z);
+                    break;
+                case 'brokenTile':
+                    createBrokenTile(obj.x, obj.z);
+                    break;
+                case 'staticWall':
+                    createStaticWall(obj.x, obj.z, obj.height || 1);
+                    break;
+                case 'movingObstacle':
+                    createMovingObstacle(obj.x, obj.z, obj.endX, obj.endZ, obj.speed || 1);
+                    break;
+            }
+        });
+        
+        // Initialize fall detection for 2D levels
+        initializeFallDetection(level);
+    }
     
     // Link teleporter pairs
     linkTeleporterPairs();
@@ -709,17 +3525,22 @@ function loadJsonLevel(levelIndex) {
     updateScoreDisplay();
     updatePlayerPosition();
     
+    // Transition overlay system removed - no longer needed
+    
     // Show level start message
     showMessage(`Level ${level.number}: ${level.name}`, '#00ccff', 3000);
     
     // Update level info display
     updateLevelInfo();
     
+    // Update HUD with level information
+    updateLevelHUD(level, levelIndex);
+    
     // Send level initialization event to server for multiplayer sync
-    if (multiplayerState.isConnected) {
+    if (multiplayerState.isConnected && !gameMode.isSinglePlayer) {
         socket.emit('initializeLevel', {
             levelType: 'json',
-            levelIndex: levelIndex,
+            levelIndex: currentLevelIndex,
             levelNumber: level.number,
             levelName: level.name,
             coinCount: coins.length,
@@ -730,7 +3551,183 @@ function loadJsonLevel(levelIndex) {
     // Start the level timer
     startLevelTimer();
     
+    // Force camera update to target player
+    updateThirdPersonCamera();
+    
+    console.log(`📄 JSON level ${level.name} loaded successfully`);
+    console.log(`📄 Player position: (${player.position.x.toFixed(2)}, ${player.position.y.toFixed(2)}, ${player.position.z.toFixed(2)})`);
+    
     return true;
+}
+
+// ============ 3D LEVEL HELPER FUNCTIONS ============
+
+// Create 3D platform based on type
+function create3DPlatform(config) {
+    switch (config.type) {
+        case 'floating':
+            return createFloatingPlatform(config);
+        case 'angled':
+            return createAngledPlatform(config);
+        case 'curved':
+            return createCurvedPlatform(config);
+        case 'spiral':
+            return createSpiralPlatform(config);
+        case 'moving':
+            return createMovingPlatform(config);
+        default:
+            console.warn('Unknown platform type:', config.type);
+            return createFloatingPlatform(config); // Fallback
+    }
+}
+
+// Create 3D level object
+function create3DLevelObject(obj) {
+    // Handle 3D position format
+    const position = obj.position || { x: obj.x || 0, y: obj.y || 0, z: obj.z || 0 };
+    
+    switch (obj.type) {
+        case 'coin':
+            return createCoinAt3D(position.x, position.y, position.z);
+        case 'key':
+            return createKeyAt3D(position.x, position.y, position.z);
+        case 'goal':
+            return createGoalAt3D(position.x, position.y, position.z);
+        case 'disappearingTile':
+            return createDisappearingTile({
+                position: position,
+                size: obj.size || { width: 2, height: 0.2, depth: 2 },
+                delay: obj.delay,
+                duration: obj.duration
+            });
+        case 'pressurePlate':
+            return createPressurePlate({
+                position: position,
+                size: obj.size || { width: 1, height: 0.1, depth: 1 },
+                triggers: obj.triggers || []
+            });
+        case 'timedSpike':
+            return createTimedSpike({
+                position: position,
+                size: obj.size || { width: 1, height: 0.5, depth: 1 },
+                timing: obj.timing
+            });
+        case 'movingSpike':
+            return createMovingSpike({
+                position: position,
+                size: obj.size || { width: 0.5, height: 1, depth: 0.5 },
+                movement: obj.movement
+            });
+        case 'gravityChanger':
+            return createGravityChanger({
+                position: position,
+                size: obj.size || { width: 2, height: 0.2, depth: 2 },
+                newGravity: obj.newGravity,
+                duration: obj.duration
+            });
+        default:
+            console.warn('Unknown 3D object type:', obj.type);
+            return null;
+    }
+}
+
+// Create 3D coin
+function createCoinAt3D(x, y, z) {
+    const coinGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 16);
+    const coinMaterial = new THREE.MeshLambertMaterial({ color: 0xffd700 });
+    const coin = new THREE.Mesh(coinGeometry, coinMaterial);
+    
+    coin.position.set(x, y, z);
+    coin.castShadow = true;
+    coin.receiveShadow = true;
+    
+    // Add floating animation data
+    coin.userData = {
+        originalY: y,
+        animationOffset: Math.random() * Math.PI * 2,
+        id: `coin_${coins.length}`
+    };
+    
+    worldGroup.add(coin);
+    coins.push(coin);
+    
+    return coin;
+}
+
+// Create 3D key
+function createKeyAt3D(x, y, z) {
+    if (gameKey) {
+        worldGroup.remove(gameKey);
+    }
+    
+    const keyGroup = new THREE.Group();
+    
+    // Key body
+    const keyBodyGeometry = new THREE.BoxGeometry(0.1, 0.8, 0.1);
+    const keyBodyMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0xff6600,
+        emissive: 0x331100
+    });
+    const keyBody = new THREE.Mesh(keyBodyGeometry, keyBodyMaterial);
+    keyBody.position.set(0, 0, 0);
+    keyGroup.add(keyBody);
+    
+    // Key head
+    const keyHeadGeometry = new THREE.BoxGeometry(0.4, 0.1, 0.1);
+    const keyHead = new THREE.Mesh(keyHeadGeometry, keyBodyMaterial);
+    keyHead.position.set(0, 0.35, 0);
+    keyGroup.add(keyHead);
+    
+    // Key teeth
+    const keyTeethGeometry = new THREE.BoxGeometry(0.2, 0.05, 0.05);
+    const keyTeeth = new THREE.Mesh(keyTeethGeometry, keyBodyMaterial);
+    keyTeeth.position.set(0.15, 0.25, 0);
+    keyGroup.add(keyTeeth);
+    
+    keyGroup.position.set(x, y, z);
+    keyGroup.castShadow = true;
+    keyGroup.receiveShadow = true;
+    
+    keyGroup.userData = {
+        originalY: y,
+        animationOffset: Math.random() * Math.PI * 2,
+        id: `key_${x}_${y}_${z}`
+    };
+    
+    worldGroup.add(keyGroup);
+    gameKey = keyGroup;
+    
+    return keyGroup;
+}
+
+// Create 3D goal
+function createGoalAt3D(x, y, z) {
+    if (goalTile) {
+        worldGroup.remove(goalTile);
+    }
+    
+    const goalGeometry = new THREE.CylinderGeometry(0.8, 0.8, 0.2, 16);
+    const goalMaterial = new THREE.MeshLambertMaterial({ 
+        color: gameScore.hasKey ? 0x00ff00 : 0x666666,
+        emissive: gameScore.hasKey ? 0x003300 : 0x000000,
+        transparent: true,
+        opacity: gameScore.hasKey ? 0.9 : 0.5
+    });
+    
+    const goal = new THREE.Mesh(goalGeometry, goalMaterial);
+    goal.position.set(x, y, z);
+    goal.castShadow = true;
+    goal.receiveShadow = true;
+    
+    goal.userData = {
+        originalY: y,
+        animationOffset: Math.random() * Math.PI * 2
+    };
+    
+    worldGroup.add(goal);
+    goalTile = goal;
+    
+    return goal;
 }
 
 // Function to create key at specific position
@@ -774,13 +3771,11 @@ function createKeyAt(gridX, gridZ) {
     keyGroup.gridX = gridX;
     keyGroup.gridZ = gridZ;
     
-    // Generate unique ID for multiplayer sync
-    keyGroup.id = `key_${gridX}_${gridZ}`;
-    
-    // Add floating animation data
+    // Add floating animation data and unique ID for multiplayer sync
     keyGroup.userData = {
         originalY: keyGroup.position.y,
-        animationOffset: Math.random() * Math.PI * 2
+        animationOffset: Math.random() * Math.PI * 2,
+        id: `key_${gridX}_${gridZ}`
     };
     
     worldGroup.add(keyGroup);
@@ -829,6 +3824,22 @@ function createGoalAt(gridX, gridZ) {
 
 // Function to create teleport tile at specific position
 function createTeleportTileAt(gridX, gridZ, pairId, destination) {
+    // Validate destination coordinates
+    if (!destination || typeof destination !== 'object') {
+        console.warn(`Teleport tile at (${gridX}, ${gridZ}) has missing or invalid destination:`, destination);
+        return null;
+    }
+    
+    // Check if destination has valid coordinates (supports both x/z and gridX/gridZ formats)
+    const destX = destination.x !== undefined ? destination.x : destination.gridX;
+    const destZ = destination.z !== undefined ? destination.z : destination.gridZ;
+    
+    if (!isValidGridPosition(destX, destZ)) {
+        console.warn(`Teleport tile at (${gridX}, ${gridZ}) has invalid destination coordinates:`, destination);
+        console.warn(`Expected valid numbers within grid bounds (0-${gridSize-1}), got destX=${destX}, destZ=${destZ}`);
+        return null;
+    }
+    
     const teleportGroup = new THREE.Group();
     
     // Base platform
@@ -883,7 +3894,14 @@ function createTeleportTileAt(gridX, gridZ, pairId, destination) {
     teleportGroup.gridX = gridX;
     teleportGroup.gridZ = gridZ;
     teleportGroup.pairId = pairId;
-    teleportGroup.destination = destination;
+    
+    // Normalize destination format to ensure consistent access
+    teleportGroup.destination = {
+        x: destX,
+        z: destZ,
+        gridX: destX, // For backward compatibility
+        gridZ: destZ  // For backward compatibility
+    };
     
     // Add animation data
     teleportGroup.userData = {
@@ -894,6 +3912,7 @@ function createTeleportTileAt(gridX, gridZ, pairId, destination) {
     worldGroup.add(teleportGroup);
     teleportTiles.push(teleportGroup);
     
+    console.log(`Created teleport tile at (${gridX}, ${gridZ}) with destination (${destX}, ${destZ})`);
     return teleportGroup;
 }
 
@@ -909,9 +3928,22 @@ function linkTeleporterPairs() {
             );
             if (destinationTile) {
                 tile.destinationTile = destinationTile;
+                console.log(`Linked teleporter pair: (${tile.gridX}, ${tile.gridZ}) <-> (${destinationTile.gridX}, ${destinationTile.gridZ})`);
+            } else {
+                console.warn(`Teleporter at (${tile.gridX}, ${tile.gridZ}) could not find its destination at (${tile.destination.x}, ${tile.destination.z}) with pairId ${tile.pairId}`);
             }
+        } else {
+            console.warn(`Teleporter at (${tile.gridX}, ${tile.gridZ}) has no destination defined`);
         }
     });
+}
+
+// Helper function to validate grid coordinates
+function isValidGridPosition(x, z) {
+    return typeof x === 'number' && typeof z === 'number' && 
+           !isNaN(x) && !isNaN(z) && 
+           x >= 0 && z >= 0 && 
+           x < gridSize && z < gridSize;
 }
 
 // Helper function to show messages
@@ -950,7 +3982,7 @@ function toggleLevelMode() {
     
     // Restart current level in new mode
     if (useJsonLevels && jsonLevels.length > 0) {
-        currentJsonLevelIndex = 0;
+        setCurrentLevelIndex(0);
         loadJsonLevel(currentJsonLevelIndex);
     } else {
         generateNewLevel(15);
@@ -966,7 +3998,7 @@ function nextJsonLevel() {
     }
     
     if (currentJsonLevelIndex < jsonLevels.length - 1) {
-        currentJsonLevelIndex++;
+        setCurrentLevelIndex(currentJsonLevelIndex + 1);
         loadJsonLevel(currentJsonLevelIndex);
     } else {
         showMessage('No more JSON levels available', '#ffaa00');
@@ -981,7 +4013,7 @@ function previousJsonLevel() {
     }
     
     if (currentJsonLevelIndex > 0) {
-        currentJsonLevelIndex--;
+        setCurrentLevelIndex(currentJsonLevelIndex - 1);
         loadJsonLevel(currentJsonLevelIndex);
     } else {
         showMessage('Already at the first JSON level', '#ffaa00');
@@ -995,7 +4027,7 @@ async function reloadLevelData() {
     
     if (success && useJsonLevels) {
         // Restart current level with new data
-        currentJsonLevelIndex = 0;
+        setCurrentLevelIndex(0);
         loadJsonLevel(currentJsonLevelIndex);
     }
     
@@ -1027,6 +4059,22 @@ function updateLevelInfo() {
     // Update level menu if it's open
     if (levelMenu.isVisible) {
         updateLevelMenuDisplay();
+    }
+}
+
+// Update level HUD with current level information
+function updateLevelHUD(level, levelIndex) {
+    const levelNameElement = document.getElementById('level-name');
+    if (levelNameElement) {
+        levelNameElement.textContent = `${level.name} (${levelIndex + 1}/${jsonLevels.length})`;
+    }
+    
+    // Add best time indicator to timer display
+    const timerElement = document.getElementById('level-timer');
+    if (timerElement && levelProgress.jsonLevels[levelIndex]?.bestTime) {
+        const bestTime = levelProgress.jsonLevels[levelIndex].bestTime;
+        const bestTimeFormatted = formatTime(bestTime);
+        timerElement.title = `🏆 Best Time: ${bestTimeFormatted}`;
     }
 }
 
@@ -1487,13 +4535,11 @@ function createKey() {
     keyGroup.gridX = keyGridX;
     keyGroup.gridZ = keyGridZ;
     
-    // Generate unique ID for multiplayer sync
-    keyGroup.id = `key_${keyGridX}_${keyGridZ}`;
-    
-    // Add floating animation data
+    // Add floating animation data and unique ID for multiplayer sync
     keyGroup.userData = {
         originalY: keyGroup.position.y,
-        animationOffset: Math.random() * Math.PI * 2
+        animationOffset: Math.random() * Math.PI * 2,
+        id: `key_${keyGridX}_${keyGridZ}`
     };
     
     worldGroup.add(keyGroup);
@@ -1548,10 +4594,10 @@ function createGoalTile() {
 function collectKey() {
     if (gameKey) {
         // Send collection event to server for multiplayer sync
-        if (multiplayerState.isConnected && gameKey.id) {
+        if (multiplayerState.isConnected && gameKey.userData.id && !gameMode.isSinglePlayer) {
             socket.emit('collectItem', {
                 itemType: 'key',
-                itemId: gameKey.id
+                itemId: gameKey.userData.id
             });
         }
         
@@ -1572,6 +4618,9 @@ function collectKey() {
             goalTile.material.opacity = 0.9;
         }
         
+        // Update typed goal tile appearance
+        updateGoalTileAppearance();
+        
         // Show key collection message
         showMessage('Key collected! The exit is now unlocked!', '#ff6600', 3000);
         
@@ -1579,15 +4628,37 @@ function collectKey() {
         
         // Create collection effect
         showKeyCollectionEffect();
+        
+        // Check for level completion in single player mode
+        if (gameMode.isSinglePlayer && gameScore.coins >= gameScore.requiredCoins && gameScore.hasKey) {
+            setTimeout(() => {
+                checkForAutoLevelCompletion();
+            }, 1000);
+        }
     }
 }
 
 // Function to complete the level
 function completeLevel() {
-    if (!gameScore.hasKey) {
-        // Show locked message
-        showMessage('Exit is locked! Find the key first!', '#ff6666', 2000);
-        return;
+    // Check completion requirements based on game mode
+    if (gameMode.isSinglePlayer) {
+        // Single player mode: require ALL coins + key
+        if (!gameScore.hasKey) {
+            showMessage('Exit is locked! Find the key first!', '#ff6666', 2000);
+            return;
+        }
+        
+        if (gameScore.coins < gameScore.requiredCoins) {
+            const remaining = gameScore.requiredCoins - gameScore.coins;
+            showMessage(`Collect all coins first! ${remaining} coins remaining.`, '#ff6666', 2000);
+            return;
+        }
+    } else {
+        // Multiplayer mode: only require key (legacy behavior)
+        if (!gameScore.hasKey) {
+            showMessage('Exit is locked! Find the key first!', '#ff6666', 2000);
+            return;
+        }
     }
     
     gameScore.levelComplete = true;
@@ -1655,44 +4726,68 @@ function completeLevel() {
     updateScoreDisplay({ animateScore: true });
     
     // Start voting for multiplayer or auto-transition for single player
-    if (multiplayerState.isConnected && Object.keys(multiplayerState.otherPlayers).length > 0) {
-        // Multiplayer: Start voting
-        setTimeout(() => {
-            const levelData = {
-                levelNumber: gameScore.currentLevel,
-                levelName: useJsonLevels && jsonLevels[currentJsonLevelIndex] ? jsonLevels[currentJsonLevelIndex].name : `Level ${gameScore.currentLevel}`,
-                levelScore: levelScore,
-                completionTime: completionTime,
-                timeBonus: timeBonus,
-                progressInfo: progressInfo
-            };
-            
-            socket.emit('levelCompleted', levelData);
-        }, 2000);
+    if (!gameMode.isSinglePlayer && multiplayerState.isConnected && Object.keys(multiplayerState.otherPlayers).length > 0) {
+        // Multiplayer: Start voting immediately
+        const levelData = {
+            levelNumber: gameScore.currentLevel,
+            levelName: useJsonLevels && jsonLevels[currentJsonLevelIndex] ? jsonLevels[currentJsonLevelIndex].name : `Level ${gameScore.currentLevel}`,
+            levelScore: levelScore,
+            completionTime: completionTime,
+            timeBonus: timeBonus,
+            progressInfo: progressInfo
+        };
+        
+        socket.emit('levelCompleted', levelData);
     } else {
-        // Single player: Auto-transition as before
-        setTimeout(() => {
-            if (useJsonLevels && currentJsonLevelIndex >= jsonLevels.length - 1) {
-                // Don't show transition message for completion screen
-                transitionToNextLevel();
-            } else {
-                showMessage('Transitioning to next level...', '#ffff00', 1000);
-                
-                // Transition to next level after 1 more second
-                setTimeout(() => {
-                    transitionToNextLevel();
-                }, 1000);
-            }
-        }, 2000);
+        // Single player: Direct level transition
+        if (useJsonLevels && currentJsonLevelIndex >= jsonLevels.length - 1) {
+            // All levels completed - handle directly
+            handleAllJsonLevelsCompleted();
+        } else {
+            // Transition to next level immediately
+            transitionToNextLevel();
+        }
     }
+}
+
+// Function to check for automatic level completion in single player mode
+function checkForAutoLevelCompletion() {
+    // Only auto-complete in single player mode
+    if (!gameMode.isSinglePlayer) return;
+    
+    // Check if all requirements are met
+    if (gameScore.coins >= gameScore.requiredCoins && gameScore.hasKey && !gameScore.levelComplete) {
+        showMessage('All objectives complete! Level completed!', '#00ff00', 2000);
+        
+        // Auto-complete immediately
+        completeLevel();
+    }
+}
+
+// Overlay functions removed - no longer needed for direct transitions
+
+// Function to perform direct level transition (no fade effects)
+function performSmoothLevelTransition() {
+    console.log('🎬 Starting direct level transition...');
+    
+    // Direct level loading - no delays, no overlays
+    transitionToNextLevel();
+    
+    // Immediate post-transition setup
+    postTransitionSetup();
+    
+    console.log('🎬 Direct transition complete');
 }
 
 // Function to transition to next level
 function transitionToNextLevel() {
+    console.log('🔄 Transitioning to next level...');
+    
     // Reset level state (but keep lives)
     gameScore.hasKey = false;
     gameScore.levelComplete = false;
     gameScore.coins = 0;
+    gameScore.requiredCoins = 0;
     
     // Reset timer for next level
     resetTimer();
@@ -1701,8 +4796,9 @@ function transitionToNextLevel() {
         // Use JSON levels
         if (currentJsonLevelIndex < jsonLevels.length - 1) {
             // Load next JSON level
-            currentJsonLevelIndex++;
-            loadJsonLevel(currentJsonLevelIndex);
+            setCurrentLevelIndex(currentJsonLevelIndex + 1);
+            const loadResult = loadJsonLevel(currentJsonLevelIndex);
+            console.log(`🔄 JSON level load result: ${loadResult}`);
         } else {
             // All JSON levels completed - offer options
             handleAllJsonLevelsCompleted();
@@ -1712,6 +4808,7 @@ function transitionToNextLevel() {
         gameScore.currentLevel++;
         const coinsForLevel = Math.min(15 + (gameScore.currentLevel - 1) * 2, 25);
         generateNewLevel(coinsForLevel);
+        console.log(`🔄 Generated Level ${gameScore.currentLevel} with ${coinsForLevel} coins`);
         
         // Show new level message for random levels
         showMessage(`Level ${gameScore.currentLevel} - Find the key and reach the goal! Avoid spikes!`, '#00ccff', 3000);
@@ -1720,8 +4817,138 @@ function transitionToNextLevel() {
     updateScoreDisplay();
 }
 
+// Function to set up the game state after level transition
+function postTransitionSetup() {
+    console.log('🛠️ Post-transition setup starting...');
+    
+    // Ensure player position is properly set
+    if (!player) {
+        console.error('❌ Player object is null or undefined!');
+        return;
+    }
+    
+    // For random levels, ensure player is positioned correctly since generateNewLevel doesn't reset position
+    if (!useJsonLevels || !levelDataLoaded) {
+        console.log('🛠️ Resetting player position for random level...');
+        const centerPos = gridToWorld(5, 5);
+        
+        // Use safe position setting with validation
+        setPlayerPosition({
+            x: centerPos.x,
+            y: centerPos.y + 0.55,
+            z: centerPos.z
+        }, 'post-transition random level');
+    }
+    
+    // Force camera update to target player
+    updateThirdPersonCamera();
+    
+    // Ensure camera is properly positioned
+    if (camera) {
+        console.log(`🛠️ Camera position: ${camera.position.x}, ${camera.position.y}, ${camera.position.z}`);
+    }
+    
+    // Ensure renderer is active
+    if (renderer) {
+        console.log('🛠️ Renderer active and rendering...');
+        renderer.render(scene, camera);
+    }
+    
+    console.log('🛠️ Post-transition setup complete');
+}
+
+// Function to debug the state after transition
+function debugPostTransitionState() {
+    console.log('🔍 === POST-TRANSITION DEBUG INFO ===');
+    
+    // Check scene state
+    if (scene) {
+        console.log(`🔍 Scene children count: ${scene.children.length}`);
+        console.log('🔍 Scene children:', scene.children.map(child => child.constructor.name));
+    } else {
+        console.error('❌ Scene is null!');
+    }
+    
+    // Check player state
+    if (player) {
+        const pos = player.position;
+        const posArray = pos.toArray();
+        const hasNaN = posArray.some(v => isNaN(v));
+        
+        console.log(`🔍 Player position: (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
+        console.log(`🔍 Player position array: [${posArray.map(v => v.toFixed(2)).join(', ')}]`);
+        console.log(`🔍 Player position has NaN: ${hasNaN ? '❌ YES' : '✅ NO'}`);
+        console.log(`🔍 Player visible: ${player.visible}`);
+        console.log(`🔍 Player in scene: ${scene.children.includes(player) || worldGroup.children.includes(player)}`);
+        
+        if (hasNaN) {
+            console.error('❌ CRITICAL: Player position contains NaN values!');
+            console.error('❌ This is likely the cause of the black screen issue');
+        }
+    } else {
+        console.error('❌ Player is null!');
+    }
+    
+    // Check physics player state
+    if (playerPhysics) {
+        const physicsPos = playerPhysics.position;
+        const physicsArray = [physicsPos.x, physicsPos.y, physicsPos.z];
+        const physicsHasNaN = physicsArray.some(v => isNaN(v));
+        
+        console.log(`🔍 Physics position: (${physicsPos.x.toFixed(2)}, ${physicsPos.y.toFixed(2)}, ${physicsPos.z.toFixed(2)})`);
+        console.log(`🔍 Physics position has NaN: ${physicsHasNaN ? '❌ YES' : '✅ NO'}`);
+        
+        if (physicsHasNaN) {
+            console.error('❌ CRITICAL: Physics position contains NaN values!');
+        }
+    } else {
+        console.error('❌ PlayerPhysics is null!');
+    }
+    
+    // Check camera state
+    if (camera) {
+        console.log(`🔍 Camera position: (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)})`);
+        console.log(`🔍 Camera target: Camera controls enabled: ${controls?.enabled || 'no controls'}`);
+    } else {
+        console.error('❌ Camera is null!');
+    }
+    
+    // Check renderer state
+    if (renderer) {
+        console.log(`🔍 Renderer size: ${renderer.domElement.width}x${renderer.domElement.height}`);
+        console.log(`🔍 Renderer clearing: ${renderer.autoClear}`);
+    } else {
+        console.error('❌ Renderer is null!');
+    }
+    
+    // Check game objects
+    console.log(`🔍 Coins: ${coins.length}`);
+    console.log(`🔍 Has key: ${gameKey ? 'yes' : 'no'}`);
+    console.log(`🔍 Has goal: ${goalTile ? 'yes' : 'no'}`);
+    
+    // Check worldGroup
+    if (worldGroup) {
+        console.log(`🔍 WorldGroup children: ${worldGroup.children.length}`);
+    } else {
+        console.error('❌ WorldGroup is null!');
+    }
+    
+    // Check level state
+    console.log(`🔍 Current level: ${gameScore.currentLevel}`);
+    console.log(`🔍 Use JSON levels: ${useJsonLevels}`);
+    console.log(`🔍 Current level index: ${currentLevelIndex}`);
+    
+    console.log('🔍 === END DEBUG INFO ===');
+}
+
 // Function to handle completion of all JSON levels
 function handleAllJsonLevelsCompleted() {
+    // Only show victory screen in single player mode
+    if (!gameMode.isSinglePlayer) {
+        console.log('Victory screen skipped - not in single player mode');
+        return;
+    }
+    
     // Play victory sound
     soundManager.play('victory');
     
@@ -1748,10 +4975,26 @@ function handleAllJsonLevelsCompleted() {
     console.log('🎉 JSON Level Completion Statistics:', completionStats);
 }
 
+// Function to calculate total time across all completed levels
+function calculateTotalTime() {
+    if (!levelProgress || !levelProgress.jsonLevels) return 0;
+    
+    const completedLevels = Object.values(levelProgress.jsonLevels);
+    const totalTime = completedLevels.reduce((sum, level) => {
+        if (level && level.completed && level.bestTime) {
+            return sum + level.bestTime;
+        }
+        return sum;
+    }, 0);
+    
+    return totalTime;
+}
+
 // Function to calculate completion statistics and achievements
 function calculateCompletionStats() {
     const totalCoins = calculateTotalCoinsCollected();
     const bestTime = calculateBestTime();
+    const totalTime = calculateTotalTime();
     const achievements = calculateAchievements();
     
     return {
@@ -1762,6 +5005,7 @@ function calculateCompletionStats() {
         maxLives: gameScore.maxLives,
         totalCoins: totalCoins,
         bestTime: bestTime,
+        totalTime: totalTime,
         achievements: achievements
     };
 }
@@ -1842,6 +5086,12 @@ function calculateAchievements() {
 function showVictoryScreen(stats) {
     const victoryScreen = document.getElementById('victory-screen');
     
+    // Update subtitle for single player mode
+    const subtitleElement = document.getElementById('victory-subtitle');
+    if (subtitleElement) {
+        subtitleElement.textContent = `Single Player Campaign Complete! (${stats.totalLevels} levels)`;
+    }
+    
     // Populate statistics
     document.getElementById('total-levels').textContent = stats.totalLevels;
     document.getElementById('total-score').textContent = stats.totalScore.toLocaleString();
@@ -1849,6 +5099,7 @@ function showVictoryScreen(stats) {
     document.getElementById('lives-remaining').textContent = `${stats.lives}/${stats.maxLives}`;
     document.getElementById('total-coins').textContent = stats.totalCoins;
     document.getElementById('best-time').textContent = stats.bestTime ? formatTime(stats.bestTime) : '--:--';
+    document.getElementById('total-time').textContent = stats.totalTime > 0 ? formatTime(stats.totalTime) : '--:--';
     
     // Populate achievements
     const achievementsList = document.getElementById('achievements-list');
@@ -1881,6 +5132,16 @@ function restartFromVictory() {
     soundManager.play('menuClick');
     gameState.awaitingProgressionChoice = false;
     hideVictoryScreen();
+    
+    // Show restart message
+    showMessage('🔄 Restarting Single Player Campaign...', '#ffd700', 2000);
+    
+    // Reset game state for fresh start
+    gameScore.totalScore = 0;
+    gameScore.lives = gameScore.maxLives;
+    gameScore.currentLevel = 1;
+    
+    // Restart JSON levels from the beginning
     restartJsonLevels();
 }
 
@@ -1978,7 +5239,7 @@ function handleProgressionChoice(choice) {
 
 // Function to restart JSON levels from beginning
 function restartJsonLevels() {
-    currentJsonLevelIndex = 0;
+    setCurrentLevelIndex(0);
     showMessage('🔄 Restarting JSON levels from the beginning!', '#00ffff', 3000);
     
     // Small delay for message visibility
@@ -2003,7 +5264,7 @@ function switchToRandomGeneration() {
 
 // Function to loop back to first JSON level
 function loopToFirstJsonLevel() {
-    currentJsonLevelIndex = 0;
+    setCurrentLevelIndex(0);
     showMessage('🔁 Looping back to first JSON level!', '#ff00ff', 3000);
     
     // Small delay for message visibility
@@ -2014,11 +5275,27 @@ function loopToFirstJsonLevel() {
 
 // Function to generate a new level
 function generateNewLevel(coinCount = 15) {
+    console.log(`🎲 Generating new level ${gameScore.currentLevel} with ${coinCount} coins...`);
+    
     // Clear existing level objects
     clearAllCoins();
     clearSpikeTraps();
     clearTeleportTiles();
     clearAllBouncingPlatforms();
+    clearBrokenTiles();
+    clearStaticWalls();
+    clearMovingObstacles();
+    clearTypedTiles();
+    
+    // Reset player position for random levels
+    const centerPos = gridToWorld(5, 5);
+    
+    // Use safe position setting with validation
+    setPlayerPosition({
+        x: centerPos.x,
+        y: centerPos.y + 0.55,
+        z: centerPos.z
+    }, 'random level generation');
     
     // Create new level objects
     spawnCoins(coinCount);
@@ -2042,13 +5319,15 @@ function generateNewLevel(coinCount = 15) {
         addLevelChallenge();
     }
     
-    console.log(`Generated Level ${gameScore.currentLevel} with ${coinCount} coins, ${trapCount} spike traps, ${teleportPairs} teleport pairs, and ${platformCount} bouncing platforms`);
+    console.log(`🎲 Generated Level ${gameScore.currentLevel} with ${coinCount} coins, ${trapCount} spike traps, ${teleportPairs} teleport pairs, and ${platformCount} bouncing platforms`);
     
     // Update level info display
     updateLevelInfo();
     
+    // Transition overlay system removed - no longer needed
+    
     // Send level initialization event to server for multiplayer sync
-    if (multiplayerState.isConnected) {
+    if (multiplayerState.isConnected && !gameMode.isSinglePlayer) {
         socket.emit('initializeLevel', {
             levelType: 'random',
             levelNumber: gameScore.currentLevel,
@@ -2061,6 +5340,11 @@ function generateNewLevel(coinCount = 15) {
     
     // Start the level timer
     startLevelTimer();
+    
+    // Force camera update to target player
+    updateThirdPersonCamera();
+    
+    console.log(`🎲 Level ${gameScore.currentLevel} generation complete`);
 }
 
 // Function to add level challenges
@@ -2335,9 +5619,6 @@ function damagePlayer() {
     // Show damage effect
     showDamageEffect();
     
-    // Respawn player at start position
-    respawnPlayer();
-    
     // Update UI
     updateScoreDisplay({ animateLives: true });
     
@@ -2348,25 +5629,32 @@ function damagePlayer() {
         // Show damage message
         showMessage(`Ouch! Lives remaining: ${gameScore.lives}`, '#ff3333', 2000);
     }
+    
+    // Use new respawn system if available, otherwise fall back to old system
+    if (fallDetection.currentSpawnPoint) {
+        triggerRespawn('damage');
+    } else {
+        // Fallback to old respawn system
+        respawnPlayer();
+    }
 }
 
 // Function to respawn player
 function respawnPlayer() {
+    console.log('🔄 Legacy respawn function called');
+    
     // Reset player position
     playerState.gridX = playerStartPosition.gridX;
     playerState.gridZ = playerStartPosition.gridZ;
     playerState.isMoving = false;
     
-    // Reset player world position
+    // Reset player world position using safe position setting
     const startPos = gridToWorld(playerStartPosition.gridX, playerStartPosition.gridZ);
-    player.position.copy(startPos);
-    
-    // Reset player rotation
-    playerState.baseRotation.x = 0;
-    playerState.baseRotation.z = 0;
-    player.rotation.x = 0;
-    player.rotation.y = 0;
-    player.rotation.z = 0;
+    setPlayerPosition({
+        x: startPos.x,
+        y: 0.55,
+        z: startPos.z
+    }, 'legacy respawn function');
     
     // Restart the level timer
     startLevelTimer();
@@ -2645,18 +5933,29 @@ function clearTeleportTiles() {
 function teleportPlayer(teleportTile) {
     if (!teleportTile.destination || playerState.isMoving) return;
     
+    // Validate destination coordinates before teleporting
+    const destX = teleportTile.destination.x !== undefined ? teleportTile.destination.x : teleportTile.destination.gridX;
+    const destZ = teleportTile.destination.z !== undefined ? teleportTile.destination.z : teleportTile.destination.gridZ;
+    
+    if (!isValidGridPosition(destX, destZ)) {
+        console.error(`Teleport failed: Invalid destination coordinates`, teleportTile.destination);
+        console.error(`Expected valid numbers within grid bounds (0-${gridSize-1}), got destX=${destX}, destZ=${destZ}`);
+        showMessage('Teleport failed: Invalid destination!', '#ff0000', 2000);
+        return;
+    }
+    
     // Play teleport sound effect
     soundManager.play('teleport');
     
     // Show teleport effect at current position
     showTeleportEffect(player.position);
     
-    // Update player position
-    playerState.gridX = teleportTile.destination.gridX;
-    playerState.gridZ = teleportTile.destination.gridZ;
+    // Update player position with validated coordinates
+    playerState.gridX = Math.floor(destX);
+    playerState.gridZ = Math.floor(destZ);
     
     // Update player world position
-    const destinationPos = gridToWorld(teleportTile.destination.gridX, teleportTile.destination.gridZ);
+    const destinationPos = gridToWorld(playerState.gridX, playerState.gridZ);
     player.position.copy(destinationPos);
     
     // Track teleport usage for statistics and achievements
@@ -2672,6 +5971,8 @@ function teleportPlayer(teleportTile) {
     
     // Show teleport message
     showMessage('Teleported!', '#8800ff', 1500);
+    
+    console.log(`Player teleported from (${teleportTile.gridX}, ${teleportTile.gridZ}) to (${playerState.gridX}, ${playerState.gridZ})`);
 }
 
 // Function to show teleport effect
@@ -2762,6 +6063,12 @@ function checkTeleportTileCollision() {
         const distance = playerPos.distanceTo(tile.position);
         
         if (distance < teleportDistance) {
+            // Validate tile before attempting teleport
+            if (!tile.destination) {
+                console.warn(`Teleport tile at (${tile.gridX}, ${tile.gridZ}) has no destination - skipping teleport`);
+                continue;
+            }
+            
             teleportPlayer(tile);
             break; // Only one teleport per frame
         }
@@ -2922,18 +6229,30 @@ let cameraSystem;
 
 // Initialize camera system from config
 function initializeCameraSystem() {
-    const smoothness = getConfigValue('camera.smoothness', 0.1);
-    const defaultOffset = getConfigValue('camera.defaultOffset', { x: 0, y: 4, z: 6 });
-    const defaultTarget = getConfigValue('camera.defaultTarget', { x: 0, y: 1, z: 0 });
+    const smoothness = getConfigValue('camera.smoothness', 0.15);
+    const defaultOffset = getConfigValue('camera.defaultOffset', { x: 0, y: 5, z: 7 });
+    const defaultTarget = getConfigValue('camera.defaultTarget', { x: 0, y: 1.2, z: 0 });
     
     cameraSystem = {
         offset: new THREE.Vector3(defaultOffset.x, defaultOffset.y, defaultOffset.z),
         target: new THREE.Vector3(defaultTarget.x, defaultTarget.y, defaultTarget.z),
         smoothness: smoothness,
         currentPosition: new THREE.Vector3(5, 5, 5),
-        currentTarget: new THREE.Vector3(0, 1, 0),
+        currentTarget: new THREE.Vector3(0, 1.2, 0),
         enabled: true,
         currentPreset: 'default',
+        
+        // Enhanced camera settings
+        gravityTransitionSpeed: getConfigValue('camera.gravityTransitionSpeed', 0.3),
+        jumpPredictionStrength: getConfigValue('camera.jumpPredictionStrength', 0.8),
+        fallPredictionStrength: getConfigValue('camera.fallPredictionStrength', 1.0),
+        rollingPredictionStrength: getConfigValue('camera.rollingPredictionStrength', 0.6),
+        
+        // Camera state tracking
+        lastGravityDirection: new THREE.Vector3(0, -1, 0),
+        gravityTransitionProgress: 0,
+        isTransitioning: false,
+        
         presets: {
             default: {
                 offset: new THREE.Vector3(defaultOffset.x, defaultOffset.y, defaultOffset.z),
@@ -2941,18 +6260,18 @@ function initializeCameraSystem() {
                 name: 'Default (Behind)'
             },
             front: {
-                offset: new THREE.Vector3(0, 4, -6),
-                target: new THREE.Vector3(0, 1, 0),
+                offset: new THREE.Vector3(0, 5, -7),
+                target: new THREE.Vector3(0, 1.2, 0),
                 name: 'Front View'
             },
             top: {
-                offset: new THREE.Vector3(0, 8, 0),
+                offset: new THREE.Vector3(0, 10, 0),
                 target: new THREE.Vector3(0, 0, 0),
                 name: 'Top View'
             },
             side: {
-                offset: new THREE.Vector3(6, 4, 0),
-                target: new THREE.Vector3(0, 1, 0),
+                offset: new THREE.Vector3(7, 5, 0),
+                target: new THREE.Vector3(0, 1.2, 0),
                 name: 'Side View'
             }
         }
@@ -3002,12 +6321,22 @@ function initializeControls() {
     originalControlsTarget = controls.target.clone();
 }
 
-// Player movement system
+// Player movement system - Physics-based
 const playerState = {
-    gridX: 5, // Center of 10x10 grid (0-indexed, so 5 is middle)
+    // Input state for free directional movement
+    inputState: {
+        forward: false,
+        backward: false,
+        left: false,
+        right: false,
+        jump: false
+    },
+    
+    // Legacy properties for backwards compatibility
+    gridX: 5,
     gridZ: 5,
     isMoving: false,
-    targetPosition: new THREE.Vector3(0, 0.55, 0),
+    targetPosition: new THREE.Vector3(0, 2, 0),
     baseRotation: {
         x: 0,
         z: 0
@@ -3018,6 +6347,7 @@ const playerState = {
 const gameScore = {
     coins: 0,
     totalCoins: 0,
+    requiredCoins: 0,  // Total coins needed to complete level
     hasKey: false,
     levelComplete: false,
     currentLevel: 1,
@@ -3054,6 +6384,64 @@ function validateNumber(value, fallback = 0, name = 'value') {
     }
     console.warn(`Invalid ${name}:`, value, 'using fallback:', fallback);
     return fallback;
+}
+
+// Validate and sanitize position objects to prevent NaN values
+function validatePosition(position, fallback = { x: 0, y: 2, z: 0 }, name = 'position') {
+    if (!position || typeof position !== 'object') {
+        console.warn(`❌ Invalid ${name}:`, position, 'using fallback:', fallback);
+        return { ...fallback };
+    }
+    
+    const validatedPos = {
+        x: validateNumber(position.x, fallback.x, `${name}.x`),
+        y: validateNumber(position.y, fallback.y, `${name}.y`),
+        z: validateNumber(position.z, fallback.z, `${name}.z`)
+    };
+    
+    // Log if any values were corrected
+    if (validatedPos.x !== position.x || validatedPos.y !== position.y || validatedPos.z !== position.z) {
+        console.warn(`🔧 Position ${name} corrected from`, position, 'to', validatedPos);
+    }
+    
+    return validatedPos;
+}
+
+// Safe function to set player position with validation and logging
+function setPlayerPosition(position, source = 'unknown') {
+    const validatedPos = validatePosition(position, { x: 0, y: 2, z: 0 }, `player position (${source})`);
+    
+    console.log(`🎯 Setting player position from ${source}:`, validatedPos);
+    
+    // Set physics position
+    playerPhysics.position.set(validatedPos.x, validatedPos.y, validatedPos.z);
+    
+    // Update visual player position
+    player.position.copy(playerPhysics.position);
+    
+    // Reset physics state
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.acceleration.set(0, 0, 0);
+    playerPhysics.isGrounded = false;
+    playerPhysics.canJump = false;
+    
+    // Reset visual state
+    player.rotation.set(0, 0, 0);
+    playerState.baseRotation = { x: 0, z: 0 };
+    playerState.isMoving = false;
+    
+    // Update grid position
+    const worldPos = player.position;
+    playerState.gridX = Math.round((worldPos.x / tileSize) + (gridSize / 2) - 0.5);
+    playerState.gridZ = Math.round((worldPos.z / tileSize) + (gridSize / 2) - 0.5);
+    
+    // Force camera update
+    updateThirdPersonCamera();
+    
+    // Log final position for verification
+    console.log(`✅ Player position set to: [${player.position.toArray().map(v => v.toFixed(2)).join(', ')}]`);
+    
+    return validatedPos;
 }
 
 // Convert grid coordinates to world position
@@ -3098,6 +6486,22 @@ function movePlayerTo(newGridX, newGridZ) {
         // If not a valid surface transition, provide boundary feedback
         triggerBoundaryFeedback();
         console.log(`Blocked: Cannot move to (${newGridX}, ${newGridZ}) - outside grid bounds`);
+        return false;
+    }
+    
+    // Check if the target position is blocked by a static wall
+    if (isPositionBlocked(newGridX, newGridZ)) {
+        triggerBoundaryFeedback();
+        showMessage('Path blocked by wall!', '#ff6666', 1500);
+        console.log(`Blocked: Cannot move to (${newGridX}, ${newGridZ}) - wall in the way`);
+        return false;
+    }
+    
+    // Check if the target position is blocked by an obstacle tile
+    if (isObstacleTile(newGridX, newGridZ)) {
+        triggerBoundaryFeedback();
+        showMessage('Path blocked by obstacle!', '#ff6666', 1500);
+        console.log(`Blocked: Cannot move to (${newGridX}, ${newGridZ}) - obstacle tile`);
         return false;
     }
     
@@ -3411,30 +6815,212 @@ function updateCameraPresetUI() {
     }
 }
 
+// Enhanced movement state detection
+function detectMovementState() {
+    if (!playerPhysics) return 'idle';
+    
+    const verticalVelocity = playerPhysics.velocity.y;
+    const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+    
+    // Detect different movement states
+    if (playerPhysics.isGrounded) {
+        if (horizontalSpeed > 0.1) {
+            return 'rolling';
+        } else {
+            return 'idle';
+        }
+    } else {
+        if (verticalVelocity > 1.0) {
+            return 'jumping';
+        } else if (verticalVelocity < -1.0) {
+            return 'falling';
+        } else {
+            return 'airborne';
+        }
+    }
+}
+
+// Enhanced camera prediction system
+function calculateCameraPrediction(playerWorldPos, playerVelocity, movementState) {
+    let velocityInfluence = 0.4; // Base velocity influence
+    let heightOffset = 0;
+    let lookAheadDistance = 0;
+    
+    // Get movement state-specific prediction strengths from config
+    const jumpPrediction = cameraSystem.jumpPredictionStrength || 0.8;
+    const fallPrediction = cameraSystem.fallPredictionStrength || 1.0;
+    const rollingPrediction = cameraSystem.rollingPredictionStrength || 0.6;
+    
+    // Adjust prediction based on movement state
+    switch (movementState) {
+        case 'jumping':
+            velocityInfluence = 0.4 * jumpPrediction; // More responsive during jumps
+            heightOffset = 1.5; // Look higher for jumps
+            lookAheadDistance = 0.4; // Look ahead more for jumps
+            break;
+        case 'falling':
+            velocityInfluence = 0.6 * fallPrediction; // Very responsive during falls
+            heightOffset = -0.8; // Look lower for falls
+            lookAheadDistance = 0.3; // Look ahead less for falls
+            break;
+        case 'rolling':
+            velocityInfluence = 0.5 * rollingPrediction; // Balanced for rolling
+            lookAheadDistance = 0.5; // Good look-ahead for rolling
+            break;
+        case 'airborne':
+            velocityInfluence = 0.7; // Responsive in air
+            lookAheadDistance = 0.3;
+            break;
+        default: // idle
+            velocityInfluence = 0.2; // Less responsive when idle
+            lookAheadDistance = 0.1;
+    }
+    
+    // Calculate predicted position with enhanced look-ahead
+    const horizontalVelocity = new THREE.Vector3(playerVelocity.x, 0, playerVelocity.z);
+    const lookAheadPos = playerWorldPos.clone().add(horizontalVelocity.clone().multiplyScalar(lookAheadDistance));
+    const predictedPos = lookAheadPos.clone().add(playerVelocity.clone().multiplyScalar(velocityInfluence));
+    
+    // Add height offset based on movement state
+    predictedPos.y += heightOffset;
+    
+    // Apply additional prediction based on player physics state
+    if (playerPhysics) {
+        // Predict based on acceleration for more responsive camera
+        const accelerationInfluence = 0.1;
+        const accelPrediction = playerPhysics.acceleration.clone().multiplyScalar(accelerationInfluence);
+        predictedPos.add(accelPrediction);
+        
+        // Extra prediction during rapid velocity changes
+        const velocityChange = playerVelocity.clone().sub(playerPhysics.previousVelocity);
+        const velocityChangeInfluence = 0.3;
+        predictedPos.add(velocityChange.multiplyScalar(velocityChangeInfluence));
+    }
+    
+    return predictedPos;
+}
+
+// Enhanced gravity-aware camera orientation
+function updateCameraForGravity() {
+    // Calculate current gravity direction
+    const gravityDir = physicsWorld.gravity.clone().normalize();
+    
+    // Check if gravity direction changed
+    const gravityChanged = !gravityDir.equals(cameraSystem.lastGravityDirection);
+    
+    if (gravityChanged) {
+        cameraSystem.isTransitioning = true;
+        cameraSystem.gravityTransitionProgress = 0;
+    }
+    
+    // Update gravity transition
+    if (cameraSystem.isTransitioning) {
+        cameraSystem.gravityTransitionProgress += cameraSystem.gravityTransitionSpeed;
+        if (cameraSystem.gravityTransitionProgress >= 1) {
+            cameraSystem.gravityTransitionProgress = 1;
+            cameraSystem.isTransitioning = false;
+            cameraSystem.lastGravityDirection.copy(gravityDir);
+        }
+    }
+    
+    // Interpolate gravity direction for smooth transitions
+    const currentGravityDir = cameraSystem.lastGravityDirection.clone();
+    if (cameraSystem.isTransitioning) {
+        currentGravityDir.lerp(gravityDir, cameraSystem.gravityTransitionProgress);
+    }
+    
+    // Update world state gravity direction
+    worldState.gravityDirection.copy(currentGravityDir);
+    
+    // Calculate camera up vector (opposite of gravity)
+    const up = currentGravityDir.clone().negate();
+    
+    // Apply gravity influence to camera offset and target
+    const gravityInfluence = 0.4; // How much gravity affects camera positioning
+    const gravityOffset = currentGravityDir.clone().multiplyScalar(gravityInfluence);
+    
+    // Adjust camera offset based on gravity direction
+    const adjustedOffset = cameraSystem.offset.clone().add(gravityOffset);
+    
+    return { up, adjustedOffset };
+}
+
 // Update third-person camera to follow player
 function updateThirdPersonCamera() {
     if (!cameraSystem.enabled) return;
+    
+    // Skip camera updates if locked during transitions
+    if (isCameraLocked()) {
+        return;
+    }
     
     // Get player position in world space
     const playerWorldPos = new THREE.Vector3();
     player.getWorldPosition(playerWorldPos);
     
-    // Calculate desired camera position using current offset
-    const desiredCameraPos = playerWorldPos.clone().add(cameraSystem.offset);
+    // Calculate player velocity for predictive camera positioning
+    let playerVelocity = new THREE.Vector3(0, 0, 0);
+    if (playerPhysics) {
+        playerVelocity.copy(playerPhysics.velocity);
+    }
+    
+    // Detect current movement state
+    const movementState = detectMovementState();
+    
+    // Calculate enhanced prediction
+    const predictedPos = calculateCameraPrediction(playerWorldPos, playerVelocity, movementState);
+    
+    // Update camera orientation for gravity
+    const { up, adjustedOffset } = updateCameraForGravity();
+    
+    // Calculate desired camera position using gravity-adjusted offset
+    const desiredCameraPos = predictedPos.clone().add(adjustedOffset);
     
     // Calculate desired camera target (what to look at) using current target offset
-    const desiredCameraTarget = playerWorldPos.clone().add(cameraSystem.target);
+    const desiredCameraTarget = predictedPos.clone().add(cameraSystem.target);
+    
+    // Adjust smoothness based on movement state and player velocity
+    const speed = playerVelocity.length();
+    let dynamicSmoothness = cameraSystem.smoothness;
+    
+    // Movement state-based smoothness adjustments
+    switch (movementState) {
+        case 'jumping':
+            dynamicSmoothness = Math.min(cameraSystem.smoothness * 1.8, 0.5); // More responsive
+            break;
+        case 'falling':
+            dynamicSmoothness = Math.min(cameraSystem.smoothness * 2.0, 0.6); // Most responsive
+            break;
+        case 'rolling':
+            dynamicSmoothness = Math.min(cameraSystem.smoothness * (1 + speed * 0.15), 0.4); // Speed-based
+            break;
+        case 'airborne':
+            dynamicSmoothness = Math.min(cameraSystem.smoothness * 1.5, 0.4); // Moderate response
+            break;
+        default: // idle
+            dynamicSmoothness = cameraSystem.smoothness * 0.8; // Less responsive
+    }
+    
+    // Enhanced vertical movement smoothing
+    let verticalSmoothness = dynamicSmoothness * 0.7;
+    if (movementState === 'jumping' || movementState === 'falling') {
+        verticalSmoothness = Math.min(dynamicSmoothness * 1.2, 0.5); // More responsive for jumps/falls
+    }
     
     // Smooth interpolation for camera position and target
-    cameraSystem.currentPosition.lerp(desiredCameraPos, cameraSystem.smoothness);
-    cameraSystem.currentTarget.lerp(desiredCameraTarget, cameraSystem.smoothness);
+    cameraSystem.currentPosition.lerp(desiredCameraPos, dynamicSmoothness);
+    cameraSystem.currentTarget.lerp(desiredCameraTarget, dynamicSmoothness);
+    
+    // Apply enhanced smoothing to vertical camera movement
+    const currentY = cameraSystem.currentPosition.y;
+    const targetY = desiredCameraPos.y;
+    cameraSystem.currentPosition.y = currentY + (targetY - currentY) * verticalSmoothness;
     
     // Update camera position and orientation
     camera.position.copy(cameraSystem.currentPosition);
     camera.lookAt(cameraSystem.currentTarget);
     
     // Update camera up vector based on gravity
-    const up = worldState.gravityDirection.clone().negate();
     camera.up.copy(up);
 }
 
@@ -3635,40 +7221,28 @@ document.addEventListener('keydown', (event) => {
         return;
     }
     
-    // Handle movement
-    if (!playerState.isMoving && !worldState.isRotating) {
+    // Handle physics-based movement input
+    if (!gameState.isPaused && !worldState.isRotating) {
         switch(event.code) {
             case 'ArrowUp':
             case 'KeyW':
-                movePlayerTo(playerState.gridX, playerState.gridZ - 1);
+                playerState.inputState.forward = true;
                 break;
             case 'ArrowDown':
             case 'KeyS':
-                movePlayerTo(playerState.gridX, playerState.gridZ + 1);
+                playerState.inputState.backward = true;
                 break;
             case 'ArrowLeft':
             case 'KeyA':
-                movePlayerTo(playerState.gridX - 1, playerState.gridZ);
+                playerState.inputState.left = true;
                 break;
             case 'ArrowRight':
             case 'KeyD':
-                movePlayerTo(playerState.gridX + 1, playerState.gridZ);
+                playerState.inputState.right = true;
                 break;
             case 'Space':
                 event.preventDefault(); // Prevent page scroll
-                const edgeInfo = isPlayerAtEdge();
-                if (edgeInfo.isAtEdge) {
-                    rotateWorld();
-                } else {
-                    const messageElement = document.getElementById('message');
-                    if (messageElement) {
-                        messageElement.textContent = 'Move to an edge tile for manual gravity shift, or walk into walls for automatic surface transitions!';
-                        messageElement.style.color = '#ffaa00';
-                        setTimeout(() => {
-                            messageElement.textContent = '';
-                        }, 3000);
-                    }
-                }
+                playerState.inputState.jump = true;
                 break;
             case 'KeyC':
                 // Toggle between third-person and orbit camera
@@ -3777,6 +7351,29 @@ document.addEventListener('keydown', (event) => {
 
 document.addEventListener('keyup', (event) => {
     keys[event.code] = false;
+    
+    // Handle physics-based input release
+    switch(event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+            playerState.inputState.forward = false;
+            break;
+        case 'ArrowDown':
+        case 'KeyS':
+            playerState.inputState.backward = false;
+            break;
+        case 'ArrowLeft':
+        case 'KeyA':
+            playerState.inputState.left = false;
+            break;
+        case 'ArrowRight':
+        case 'KeyD':
+            playerState.inputState.right = false;
+            break;
+        case 'Space':
+            playerState.inputState.jump = false;
+            break;
+    }
 });
 
 // Update player position and animation
@@ -3886,8 +7483,42 @@ const gameState = {
     awaitingProgressionChoice: false,
     progressionChoiceTimeout: null,
     currentState: 'lobby', // 'lobby', 'starting', 'in-game'
-    isPaused: false
+    isPaused: false,
+    isTransitioning: false // New: Track transition state
 };
+
+// Transition state management
+const transitionState = {
+    isActive: false,
+    startTime: null,
+    duration: 0,
+    type: null, // 'level-transition', 'victory-screen', etc.
+    lockInput: true,
+    lockCamera: true
+};
+
+// Function to start transition state (disabled - no longer locks input/camera)
+function startTransition(type = 'level-transition', duration = 1100, lockInput = true, lockCamera = true) {
+    // Transition state disabled - no input/camera locking
+    console.log(`Transition disabled: ${type} - proceeding without locks`);
+}
+
+// Function to end transition state (disabled - no longer needed)
+function endTransition() {
+    // Transition state disabled - no action needed
+    console.log(`Transition end called - no action needed`);
+}
+
+// Function to check if input should be locked
+function isInputLocked() {
+    return gameState.isPaused || 
+           worldState.isRotating;
+}
+
+// Function to check if camera should be locked
+function isCameraLocked() {
+    return false; // Camera locking disabled - no longer needed
+}
 
 // Pause menu functions
 function togglePauseMenu() {
@@ -4047,6 +7678,203 @@ const levelMenu = {
     currentMode: 'json' // 'json' or 'random'
 };
 
+// Game mode state
+const gameMode = {
+    currentMode: 'multiplayer', // 'singleplayer' or 'multiplayer'
+    isSinglePlayer: false
+};
+
+// ============ GAME MODE SWITCHING ============
+
+// Switch to single player mode
+function switchToSinglePlayer() {
+    gameMode.currentMode = 'singleplayer';
+    gameMode.isSinglePlayer = true;
+    
+    // Update UI
+    document.getElementById('single-player-btn').classList.add('active');
+    document.getElementById('multiplayer-btn').classList.remove('active');
+    
+    // Update lobby display
+    document.getElementById('lobby-status').textContent = 'Single Player Mode';
+    document.getElementById('lobby-player-count').textContent = '1';
+    document.getElementById('lobby-max-players').textContent = '1';
+    
+    // Hide multiplayer elements
+    document.getElementById('lobby-ready-btn').style.display = 'none';
+    document.getElementById('lobby-start-btn').style.display = 'none';
+    const leaveBtn = document.getElementById('lobby-leave-btn');
+    leaveBtn.textContent = 'Start Game';
+    leaveBtn.onclick = startSinglePlayerGame;
+    leaveBtn.className = 'lobby-btn start-game'; // Apply orange styling
+    
+    // Hide player list
+    document.getElementById('lobby-player-list').style.display = 'none';
+    
+    // Update info text
+    document.querySelector('.lobby-info').innerHTML = `
+        <p>Single Player Mode - Complete puzzle levels at your own pace</p>
+        <p>Features: Broken tiles, static walls, moving obstacles, and locked goals</p>
+    `;
+    
+    // Disconnect from multiplayer if connected
+    if (multiplayerState.isConnected) {
+        socket.disconnect();
+        multiplayerState.isConnected = false;
+        updateConnectionStatus();
+    }
+    
+    // Hide multiplayer HUD elements
+    hideMultiplayerHUD();
+    
+    // Clear any existing other players
+    clearOtherPlayers();
+    
+    // Reset multiplayer state
+    multiplayerState.isConnected = false;
+    multiplayerState.localPlayerId = null;
+    multiplayerState.localPlayerColor = null;
+    multiplayerState.otherPlayers = {};
+    multiplayerState.serverGameState = null;
+    
+    // Update lobby UI to reflect single player mode
+    updateLobbyUI();
+    
+    console.log('Switched to single player mode');
+}
+
+// Switch to multiplayer mode
+function switchToMultiplayer() {
+    gameMode.currentMode = 'multiplayer';
+    gameMode.isSinglePlayer = false;
+    
+    // Update UI
+    document.getElementById('single-player-btn').classList.remove('active');
+    document.getElementById('multiplayer-btn').classList.add('active');
+    
+    // Update lobby display
+    document.getElementById('lobby-status').textContent = 'Waiting for players...';
+    document.getElementById('lobby-player-count').textContent = '0';
+    document.getElementById('lobby-max-players').textContent = '8';
+    
+    // Show multiplayer elements
+    document.getElementById('lobby-ready-btn').style.display = 'block';
+    document.getElementById('lobby-start-btn').style.display = 'none';
+    const leaveBtn = document.getElementById('lobby-leave-btn');
+    leaveBtn.textContent = 'Leave Lobby';
+    leaveBtn.onclick = leaveLobby;
+    leaveBtn.className = 'lobby-btn'; // Reset to default styling
+    
+    // Show player list
+    document.getElementById('lobby-player-list').style.display = 'block';
+    
+    // Update info text
+    document.querySelector('.lobby-info').innerHTML = `
+        <p>All players must be ready before the game can start.</p>
+        <p>The host can start the game manually with minimum players.</p>
+    `;
+    
+    // Show multiplayer HUD elements
+    showMultiplayerHUD();
+    
+    // Reconnect to multiplayer
+    if (!multiplayerState.isConnected) {
+        socket.connect();
+    }
+    
+    // Update lobby UI to reflect multiplayer mode
+    updateLobbyUI();
+    
+    console.log('Switched to multiplayer mode');
+}
+
+// Start single player game
+function startSinglePlayerGame() {
+    // Hide lobby
+    document.getElementById('lobby-overlay').classList.add('hidden');
+    
+    // Start background music
+    soundManager.startBackgroundMusic();
+    
+    // Update game state
+    gameState.currentState = 'in-game';
+    
+    // Initialize the first level
+    if (useJsonLevels && jsonLevels.length > 0) {
+        setCurrentLevelIndex(0);
+        loadJsonLevel(currentJsonLevelIndex);
+    } else {
+        generateNewLevel(15);
+    }
+    
+    // Show game start message
+    showMessage('Single Player Game Started!', '#00ff00', 3000);
+    
+    console.log('Single player game started');
+}
+
+// Hide multiplayer HUD elements
+function hideMultiplayerHUD() {
+    // Hide connection status
+    const connectionStatus = document.getElementById('connection-status');
+    if (connectionStatus) {
+        connectionStatus.style.display = 'none';
+    }
+    
+    // Hide multiplayer player count display
+    const playerCountDisplay = document.getElementById('player-count-display');
+    if (playerCountDisplay) {
+        playerCountDisplay.style.display = 'none';
+    }
+    
+    // Hide other multiplayer UI elements
+    const multiplayerElements = document.querySelectorAll('[data-multiplayer-only]');
+    multiplayerElements.forEach(element => {
+        element.style.display = 'none';
+    });
+    
+    console.log('Multiplayer HUD elements hidden');
+}
+
+// Show multiplayer HUD elements
+function showMultiplayerHUD() {
+    // Show connection status
+    const connectionStatus = document.getElementById('connection-status');
+    if (connectionStatus) {
+        connectionStatus.style.display = 'block';
+    }
+    
+    // Show multiplayer player count display
+    const playerCountDisplay = document.getElementById('player-count-display');
+    if (playerCountDisplay) {
+        playerCountDisplay.style.display = 'block';
+    }
+    
+    // Show other multiplayer UI elements
+    const multiplayerElements = document.querySelectorAll('[data-multiplayer-only]');
+    multiplayerElements.forEach(element => {
+        element.style.display = 'block';
+    });
+    
+    console.log('Multiplayer HUD elements shown');
+}
+
+// Clear all other players from the scene
+function clearOtherPlayers() {
+    Object.keys(multiplayerState.otherPlayers).forEach(playerId => {
+        const playerObj = multiplayerState.otherPlayers[playerId];
+        if (playerObj && playerObj.mesh) {
+            scene.remove(playerObj.mesh);
+            if (playerObj.nameTag) {
+                scene.remove(playerObj.nameTag);
+            }
+        }
+    });
+    
+    multiplayerState.otherPlayers = {};
+    console.log('All other players cleared from scene');
+}
+
 // Timer functions
 function startLevelTimer() {
     levelTimer.startTime = Date.now();
@@ -4160,7 +7988,18 @@ function updateLevelProgress(levelIndex, score, completionTime = null) {
         
         // Unlock next level
         if (levelIndex + 1 < jsonLevels.length) {
+            const previousUnlocked = levelProgress.unlockedLevels;
             levelProgress.unlockedLevels = Math.max(levelProgress.unlockedLevels, levelIndex + 2);
+            
+            // Show unlock message if a new level was unlocked
+            if (levelProgress.unlockedLevels > previousUnlocked) {
+                const nextLevel = jsonLevels[levelIndex + 1];
+                if (nextLevel) {
+                    setTimeout(() => {
+                        showMessage(`🔓 New level unlocked: ${nextLevel.name}!`, '#00ff00', 3000);
+                    }, 2000);
+                }
+            }
         }
     } else {
         // Update score if it's higher
@@ -5283,9 +9122,23 @@ function updateLevelMenuDisplay() {
         const completed = Object.values(levelProgress.jsonLevels).filter(l => l.completed).length;
         const total = jsonLevels.length;
         const progressPercent = (completed / total) * 100;
+        const unlocked = levelProgress.unlockedLevels;
         
-        progressText.textContent = `Progress: ${completed}/${total}`;
-        scoreText.textContent = `Total Score: ${levelProgress.totalScore}`;
+        // Calculate additional statistics
+        const completedLevels = Object.values(levelProgress.jsonLevels).filter(l => l.completed);
+        const totalAttempts = Object.values(levelProgress.jsonLevels).reduce((sum, l) => sum + (l.attempts || 0), 0);
+        const averageTime = completedLevels.length > 0 ? 
+            completedLevels.reduce((sum, l) => sum + (l.bestTime || 0), 0) / completedLevels.length : 0;
+        
+        progressText.textContent = `Progress: ${completed}/${total} completed • ${unlocked}/${total} unlocked`;
+        let scoreTextContent = `Total Score: ${levelProgress.totalScore.toLocaleString()}`;
+        if (totalAttempts > 0) {
+            scoreTextContent += ` • ${totalAttempts} attempts`;
+        }
+        if (averageTime > 0) {
+            scoreTextContent += ` • Avg: ${formatTime(averageTime)}`;
+        }
+        scoreText.textContent = scoreTextContent;
         progressBar.style.width = `${progressPercent}%`;
         
         // Create level buttons
@@ -5337,7 +9190,10 @@ function createLevelButton(level, index) {
     const levelScore = document.createElement('div');
     levelScore.className = 'level-score';
     if (progress?.score) {
-        levelScore.textContent = `Score: ${progress.score}`;
+        levelScore.textContent = `🏆 ${progress.score}`;
+    } else if (progress?.attempts > 0) {
+        levelScore.textContent = `🎯 ${progress.attempts} attempts`;
+        levelScore.style.color = '#ffaa00';
     }
     
     const levelTime = document.createElement('div');
@@ -5346,17 +9202,22 @@ function createLevelButton(level, index) {
     levelTime.style.color = '#88ffff';
     levelTime.style.marginTop = '3px';
     if (progress?.bestTime) {
-        levelTime.textContent = `Best: ${formatTime(progress.bestTime)}`;
+        levelTime.textContent = `⏱️ ${formatTime(progress.bestTime)}`;
+    } else if (isCompleted) {
+        levelTime.textContent = `⏱️ --:--`;
     }
     
     const levelStatus = document.createElement('div');
     levelStatus.className = 'level-status';
     if (isCompleted) {
-        levelStatus.textContent = '✓';
+        levelStatus.textContent = '✔️';
+        levelStatus.style.color = '#00ff00';
     } else if (isCurrent) {
-        levelStatus.textContent = '▶';
+        levelStatus.textContent = '▶️';
+        levelStatus.style.color = '#ffff00';
     } else if (isLocked) {
         levelStatus.textContent = '🔒';
+        levelStatus.style.color = '#666666';
     }
     
     button.appendChild(levelNumber);
@@ -5364,6 +9225,31 @@ function createLevelButton(level, index) {
     button.appendChild(levelScore);
     button.appendChild(levelTime);
     button.appendChild(levelStatus);
+    
+    // Add tooltip with level information
+    let tooltip = `Level ${index + 1}: ${level.name}`;
+    if (isCompleted) {
+        tooltip += `\n✔️ Completed`;
+        if (progress?.score) {
+            tooltip += `\n🏆 Score: ${progress.score}`;
+        }
+        if (progress?.bestTime) {
+            tooltip += `\n⏱️ Best Time: ${formatTime(progress.bestTime)}`;
+        }
+        if (progress?.attempts > 1) {
+            tooltip += `\n🎯 Attempts: ${progress.attempts}`;
+        }
+    } else if (progress?.attempts > 0) {
+        tooltip += `\n🎯 Attempts: ${progress.attempts}`;
+    }
+    
+    if (isLocked) {
+        tooltip += `\n🔒 Complete previous level to unlock`;
+    } else if (isCurrent) {
+        tooltip += `\n▶️ Currently playing`;
+    }
+    
+    button.title = tooltip;
     
     // Add click handler
     if (!isLocked) {
@@ -5379,7 +9265,7 @@ function createLevelButton(level, index) {
 function selectLevel(levelIndex) {
     if (levelIndex >= jsonLevels.length) return;
     
-    currentJsonLevelIndex = levelIndex;
+    setCurrentLevelIndex(levelIndex);
     levelProgress.currentLevel = levelIndex;
     
     if (!useJsonLevels) {
@@ -5628,14 +9514,15 @@ socket.on('gameStarted', (data) => {
     // Show game start message
     showMessage('Game started! Good luck!', '#00ff00', 3000);
     
-    // Initialize level (first player to connect typically does this)
-    setTimeout(() => {
-        if (useJsonLevels && jsonLevels.length > 0) {
-            loadJsonLevel(0);
-        } else {
-            generateNewLevel(15);
-        }
-    }, 1000);
+            // Initialize level (first player to connect typically does this)
+        setTimeout(() => {
+            if (useJsonLevels && jsonLevels.length > 0) {
+                setCurrentLevelIndex(0);
+                loadJsonLevel(0);
+            } else {
+                generateNewLevel(15);
+            }
+        }, 1000);
 });
 
 // Voting socket event handlers
@@ -5703,8 +9590,13 @@ socket.on('levelRestarted', (data) => {
     playerState.isMoving = false;
     
     const startPos = gridToWorld(5, 5);
-    player.position.copy(startPos);
-    player.position.y = 0.55;
+    
+    // Use safe position setting with validation
+    setPlayerPosition({
+        x: startPos.x,
+        y: 0.55,
+        z: startPos.z
+    }, 'socket level restart');
     
     // Reset player rotation
     playerState.baseRotation.x = 0;
@@ -5725,10 +9617,8 @@ socket.on('levelRestarted', (data) => {
 socket.on('continueToNextLevel', (data) => {
     console.log('Continue to next level:', data);
     
-    // Trigger level transition
-    setTimeout(() => {
-        transitionToNextLevel();
-    }, 1000);
+    // Direct level transition - no delays
+    performSmoothLevelTransition();
 });
 
 socket.on('votingSnapshot', (data) => {
@@ -5807,7 +9697,7 @@ socket.on('itemCollected', (data) => {
     // Remove the item from the game world
     if (itemType === 'coin') {
         // Find and remove the coin
-        const coinToRemove = coins.find(coin => coin.id === itemId);
+        const coinToRemove = coins.find(coin => coin.userData.id === itemId);
         if (coinToRemove) {
             const index = coins.indexOf(coinToRemove);
             if (index > -1) {
@@ -5824,7 +9714,7 @@ socket.on('itemCollected', (data) => {
         }
     } else if (itemType === 'key') {
         // Remove the key if it exists
-        if (gameKey && gameKey.id === itemId) {
+        if (gameKey && gameKey.userData.id === itemId) {
             worldGroup.remove(gameKey);
             gameKey = null;
             
@@ -5877,7 +9767,7 @@ socket.on('gameStateSnapshot', (data) => {
     
     // Remove already collected coins
     collectedCoins.forEach(coinId => {
-        const coinToRemove = coins.find(coin => coin.id === coinId);
+        const coinToRemove = coins.find(coin => coin.userData.id === coinId);
         if (coinToRemove) {
             const index = coins.indexOf(coinToRemove);
             if (index > -1) {
@@ -5889,7 +9779,7 @@ socket.on('gameStateSnapshot', (data) => {
     
     // Remove already collected keys
     collectedKeys.forEach(keyId => {
-        if (gameKey && gameKey.id === keyId) {
+        if (gameKey && gameKey.userData.id === keyId) {
             worldGroup.remove(gameKey);
             gameKey = null;
             
@@ -6110,7 +10000,8 @@ function createPlayerNameTag(name, colorData = null) {
 }
 
 function sendPlayerUpdate() {
-    if (!multiplayerState.isConnected) return;
+    // Skip multiplayer updates in single player mode
+    if (gameMode.isSinglePlayer || !multiplayerState.isConnected) return;
     
     const now = Date.now();
     if (now - multiplayerState.lastPositionUpdate < multiplayerState.updateThrottle) {
@@ -6150,7 +10041,11 @@ function updateConnectionStatus() {
         const oldIndicator = statusIndicator.textContent;
         const oldText = statusText.textContent;
         
-        if (multiplayerState.isReconnecting) {
+        // In single player mode, show offline status
+        if (gameMode.isSinglePlayer) {
+            indicator = '🔷';
+            text = 'Single Player Mode';
+        } else if (multiplayerState.isReconnecting) {
             indicator = '🟡';
             text = `Reconnecting... (${multiplayerState.reconnectAttempts}/${multiplayerState.maxReconnectAttempts})`;
         } else if (multiplayerState.isConnected) {
@@ -6252,21 +10147,30 @@ function updateLobbyUI() {
         }
     }
     
-    // Update ready button
-    if (lobbyState.isReady) {
-        readyBtn.textContent = 'Ready';
-        readyBtn.className = 'lobby-btn ready';
+    // Update ready button - only show in multiplayer mode
+    if (gameMode.isSinglePlayer) {
+        readyBtn.style.display = 'none';
     } else {
-        readyBtn.textContent = 'Not Ready';
-        readyBtn.className = 'lobby-btn not-ready';
+        readyBtn.style.display = 'block';
+        if (lobbyState.isReady) {
+            readyBtn.textContent = 'Ready';
+            readyBtn.className = 'lobby-btn ready';
+        } else {
+            readyBtn.textContent = 'Not Ready';
+            readyBtn.className = 'lobby-btn not-ready';
+        }
     }
     
-    // Update start button
-    if (lobbyState.isHost) {
-        startBtn.style.display = 'inline-block';
-        startBtn.disabled = currentPlayerCount < lobbyState.minPlayers || lobbyState.gameState !== 'lobby';
-    } else {
+    // Update start button - only show in multiplayer mode
+    if (gameMode.isSinglePlayer) {
         startBtn.style.display = 'none';
+    } else {
+        if (lobbyState.isHost) {
+            startBtn.style.display = 'inline-block';
+            startBtn.disabled = currentPlayerCount < lobbyState.minPlayers || lobbyState.gameState !== 'lobby';
+        } else {
+            startBtn.style.display = 'none';
+        }
     }
     
     // Update player list
@@ -6556,7 +10460,7 @@ function resetVotingState() {
 
 // Global function for casting votes (called from HTML)
 function castVote(option) {
-    if (!votingState.active || votingState.hasVoted) {
+    if (!votingState.active || votingState.hasVoted || gameMode.isSinglePlayer) {
         return;
     }
     
@@ -6565,7 +10469,9 @@ function castVote(option) {
     votingState.myVote = option;
     
     // Send vote to server
-    socket.emit('castVote', { vote: option });
+    if (multiplayerState.isConnected) {
+        socket.emit('castVote', { vote: option });
+    }
     
     // Update display
     updateVotingDisplay();
@@ -6627,6 +10533,11 @@ window.addEventListener('resize', () => {
 function animate() {
     requestAnimationFrame(animate);
     
+    // Debug logging for transition issues (only log occasionally to avoid spam)
+    if (transitionState.isActive && Date.now() % 2000 < 16) {
+        console.log('🎬 Animate loop running during transition');
+    }
+    
     // Always update controls for damping (if enabled) - allows camera movement even when paused
     if (controls && controls.enabled) {
         controls.update();
@@ -6634,6 +10545,19 @@ function animate() {
     
     // Always update third-person camera - allows camera movement even when paused
     updateThirdPersonCamera();
+    
+    // Check for NaN values in player position before rendering
+    if (player && player.position) {
+        const pos = player.position;
+        if (isNaN(pos.x) || isNaN(pos.y) || isNaN(pos.z)) {
+            console.error('❌ CRITICAL: Player position contains NaN values in animation loop!');
+            console.error('❌ Position:', pos.x, pos.y, pos.z);
+            console.error('❌ Attempting emergency position reset...');
+            
+            // Emergency position reset
+            setPlayerPosition({ x: 0, y: 2, z: 0 }, 'emergency NaN fix');
+        }
+    }
     
     // Always render the scene
     renderer.render(scene, camera);
@@ -6643,7 +10567,10 @@ function animate() {
         return;
     }
     
-    // Update player movement
+    // Update Three.js physics-based movement
+    updatePhysicsMovement();
+    
+    // Update legacy player movement (for backwards compatibility)
     updatePlayer();
     
     // Animate coins
@@ -6679,6 +10606,39 @@ function animate() {
     // Check bouncing platform collision
     checkBouncingPlatformCollision();
     
+    // Check broken tile collision
+    checkBrokenTileCollision();
+    
+    // Check typed tile collision
+    checkTypedTileCollision();
+    
+    // Update and check moving obstacles
+    updateMovingObstacles();
+    checkMovingObstacleCollision();
+    
+    // Update 3D platform systems
+    updateMovingPlatforms();
+    
+    // Update enhanced trap systems
+    updateTimedSpikes();
+    updateMovingSpikes();
+    
+    // Check 3D interactive elements
+    checkPressurePlates();
+    checkGravityChangers();
+    
+    // Check disappearing tile triggers
+    checkDisappearingTileCollision();
+    
+    // Check fall detection
+    checkFallDetection();
+    
+    // Update gravity zones
+    updateGravityZones();
+    
+    // Check checkpoints
+    checkCheckpoints();
+    
     // Rotate the cube
     cube.rotation.x += 0.01;
     cube.rotation.y += 0.01;
@@ -6703,6 +10663,14 @@ async function init() {
     initializeTileSettings();
     initializeMovementSettings();
     initializeCameraSystem();
+    updatePhysicsConfig();
+    
+    // Initialize Three.js physics system
+    initializePhysics();
+    resetPlayerPhysics();
+    
+    // Create sample 3D level with curved surfaces for testing
+    createKulaWorldTestLevel();
     
     // Update sound manager with config values
     soundManager.updateFromConfig(gameConfig);
@@ -6747,6 +10715,9 @@ async function init() {
     updateStatus('Connecting to lobby...');
     updatePlayerPosition();
     
+    // Show lobby on startup
+    showLobby();
+    
     // Start animation loop
     animate();
     
@@ -6755,6 +10726,12 @@ async function init() {
     // Try to connect to socket server
     console.log('Attempting to connect to Socket.io server...');
     socket.connect();
+}
+
+// Initialize game mode (default to multiplayer)
+if (!gameMode.currentMode) {
+    gameMode.currentMode = 'multiplayer';
+    gameMode.isSinglePlayer = false;
 }
 
 // Start the game
@@ -6817,6 +10794,7 @@ window.respawnPlayer = respawnPlayer;
 window.teleportTiles = teleportTiles;
 window.createTeleportTiles = createTeleportTiles;
 window.teleportPlayer = teleportPlayer;
+window.isValidGridPosition = isValidGridPosition;
 window.bouncingPlatforms = bouncingPlatforms;
 window.createBouncingPlatforms = createBouncingPlatforms;
 window.bouncePlayer = bouncePlayer;
@@ -6854,11 +10832,64 @@ window.stopLevelTimer = stopLevelTimer;
 window.updateTimerDisplay = updateTimerDisplay;
 window.formatTime = formatTime;
 window.resetTimer = resetTimer;
+window.setCurrentLevelIndex = setCurrentLevelIndex;
+window.currentLevelIndex = () => currentLevelIndex;
+window.debugPostTransitionState = debugPostTransitionState;
+window.postTransitionSetup = postTransitionSetup;
+window.debugGameState = () => {
+    console.log('🔍 Manual debug trigger');
+    debugPostTransitionState();
+};
+window.validatePosition = validatePosition;
+window.setPlayerPosition = setPlayerPosition;
+window.testPositionSystem = () => {
+    console.log('🧪 Testing position system...');
+    
+    // Test validatePosition function
+    console.log('Testing validatePosition:');
+    console.log('Valid position:', validatePosition({ x: 1, y: 2, z: 3 }));
+    console.log('NaN position:', validatePosition({ x: NaN, y: 2, z: 3 }));
+    console.log('Undefined position:', validatePosition(undefined));
+    console.log('Null position:', validatePosition(null));
+    
+    // Test setPlayerPosition function
+    console.log('Testing setPlayerPosition:');
+    setPlayerPosition({ x: 0, y: 2, z: 0 }, 'manual test');
+    
+    // Test current player position
+    debugPostTransitionState();
+};
 window.multiplayerState = multiplayerState;
 window.addOtherPlayer = addOtherPlayer;
 window.removeOtherPlayer = removeOtherPlayer;
 window.updateOtherPlayer = updateOtherPlayer;
 window.sendPlayerUpdate = sendPlayerUpdate;
+window.switchToSinglePlayer = switchToSinglePlayer;
+window.switchToMultiplayer = switchToMultiplayer;
+window.startSinglePlayerGame = startSinglePlayerGame;
+window.hideMultiplayerHUD = hideMultiplayerHUD;
+window.showMultiplayerHUD = showMultiplayerHUD;
+window.clearOtherPlayers = clearOtherPlayers;
+window.gameMode = gameMode;
+window.brokenTiles = brokenTiles;
+window.staticWalls = staticWalls;
+window.movingObstacles = movingObstacles;
+window.createBrokenTile = createBrokenTile;
+window.createStaticWall = createStaticWall;
+window.createMovingObstacle = createMovingObstacle;
+window.clearBrokenTiles = clearBrokenTiles;
+window.clearStaticWalls = clearStaticWalls;
+window.clearMovingObstacles = clearMovingObstacles;
+window.typedTiles = typedTiles;
+window.levelTileTypes = levelTileTypes;
+window.createTypedTile = createTypedTile;
+window.loadTilesFromTypes = loadTilesFromTypes;
+window.getTileType = getTileType;
+window.isObstacleTile = isObstacleTile;
+window.isGoalTile = isGoalTile;
+window.isBrokenTile = isBrokenTile;
+window.clearTypedTiles = clearTypedTiles;
+window.updateGoalTileAppearance = updateGoalTileAppearance;
 window.updateConnectionStatus = updateConnectionStatus;
 window.updateLocalPlayerColor = updateLocalPlayerColor;
 window.createPlayerNameTag = createPlayerNameTag;

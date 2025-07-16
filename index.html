@@ -287,6 +287,7 @@
         .level-btn:hover {
             background-color: #333;
             transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
         }
         
         .level-btn.completed {
@@ -335,6 +336,14 @@
             font-size: 10px;
             color: #ffd700;
             margin-top: 5px;
+            font-weight: bold;
+        }
+        
+        .level-btn .level-time {
+            font-size: 10px;
+            color: #88ffff;
+            margin-top: 3px;
+            font-weight: bold;
         }
         
         .level-btn .level-status {
@@ -342,6 +351,8 @@
             top: 5px;
             right: 5px;
             font-size: 16px;
+            font-weight: bold;
+            text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
         }
         
         @keyframes pulse {
@@ -592,6 +603,59 @@
             margin-top: 20px;
             color: #ccc;
             font-size: 14px;
+        }
+        
+        /* Game Mode Selector Styles */
+        .game-mode-selector {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #2a2a2a;
+            border-radius: 10px;
+            border: 2px solid #333;
+        }
+        
+        .mode-toggle {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        .mode-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            background-color: #1a1a1a;
+            border: 2px solid #333;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 140px;
+            justify-content: center;
+        }
+        
+        .mode-btn:hover {
+            background-color: #333;
+            border-color: #555;
+            transform: translateY(-2px);
+        }
+        
+        .mode-btn.active {
+            background-color: #0066cc;
+            border-color: #0088ff;
+            color: #fff;
+        }
+        
+        .mode-btn.active:hover {
+            background-color: #0088ff;
+            border-color: #00aaff;
+        }
+        
+        .mode-icon {
+            font-size: 18px;
         }
         
         /* Voting System Styles */
@@ -1548,7 +1612,7 @@
         
         <!-- Top Right: Connection Status -->
         <div id="hud-top-right">
-            <div id="connection-status">
+            <div id="connection-status" data-multiplayer-only>
                 <span id="status-indicator">🔴</span>
                 <span id="status-text">Disconnected</span>
             </div>
@@ -1597,8 +1661,8 @@
         </div>
     </div>
     <div id="controls">
-        <p>Arrow keys / WASD: Move red sphere (auto-detects surface transitions at edges)</p>
-        <p>Space: Manual gravity shift when at grid edge | N: Restart game | M: Cheat (get key) | P: Pause menu | ESC: Level menu</p>
+        <p>Arrow keys / WASD: Free-directional rolling movement with realistic physics</p>
+        <p>Space: Jump with physics | N: Restart game | M: Cheat (get key) | P: Pause menu | ESC: Level menu</p>
         <p>C: Toggle camera mode (Third-person/Orbit) | R: Reset camera position | Ctrl+R: Reload config</p>
         <p>1-4: Camera presets (Default/Front/Top/Side) | Tab: Cycle presets</p>
         <p>L: Toggle JSON levels / Random generation | [ ]: Previous level | ] : Next level | Shift+R: Reload level data</p>
@@ -1657,6 +1721,21 @@
         <div class="lobby-content">
             <div class="lobby-header">
                 <h1>Game Lobby</h1>
+                
+                <!-- Game Mode Selector -->
+                <div class="game-mode-selector">
+                    <div class="mode-toggle">
+                        <button id="single-player-btn" class="mode-btn" onclick="switchToSinglePlayer()">
+                            <span class="mode-icon">🎮</span>
+                            Single Player
+                        </button>
+                        <button id="multiplayer-btn" class="mode-btn active" onclick="switchToMultiplayer()">
+                            <span class="mode-icon">👥</span>
+                            Multiplayer
+                        </button>
+                    </div>
+                </div>
+                
                 <p id="lobby-status" class="lobby-status">Waiting for players...</p>
                 <p id="lobby-countdown" class="lobby-countdown" style="display: none;"></p>
             </div>
@@ -1763,7 +1842,7 @@
         <div class="victory-content">
             <div class="victory-header">
                 <h1 class="victory-title">🎉 VICTORY! 🎉</h1>
-                <h2 class="victory-subtitle">All Levels Completed!</h2>
+                <h2 class="victory-subtitle" id="victory-subtitle">All Levels Completed!</h2>
             </div>
             
             <div class="victory-stats">
@@ -1791,6 +1870,10 @@
                     <div class="stat-item">
                         <div class="stat-number" id="best-time">--:--</div>
                         <div class="stat-label">Best Time</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="total-time">--:--</div>
+                        <div class="stat-label">Total Time</div>
                     </div>
                 </div>
             </div>
@@ -1824,7 +1907,7 @@
             <div class="victory-actions">
                 <button id="play-again-btn" class="victory-btn primary" onclick="restartFromVictory()">
                     <span class="victory-btn-icon">🔄</span>
-                    Play Again
+                    Replay Campaign
                 </button>
                 <button id="random-mode-btn" class="victory-btn" onclick="switchToRandomMode()">
                     <span class="victory-btn-icon">🎲</span>

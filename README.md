@@ -176,12 +176,12 @@ Level structure:
 - **Teleport Tiles**: Walk onto purple teleport tiles for instant transportation
 
 ### Player Movement
-- **Arrow Keys / WASD**: Move red sphere player in discrete tile increments
-- **Movement**: Grid-based (10x10 tiles) with automatic surface detection
-- **Smart Boundaries**: Walking into walls automatically transitions to new surfaces
-- **Animation**: Realistic rolling animation with physics-based rotation
-- **Effects**: Subtle bounce effect and accumulated rotation for continuous rolling
-- **Feedback**: Position display shows edge status and surface transition availability
+- **Arrow Keys / WASD**: Free-directional physics-based movement with acceleration, friction, and momentum
+- **Movement**: Real-time 3D physics using Three.js for realistic ball rolling (Kula World style)
+- **Jump Mechanics**: Spacebar applies upward force for jumping between platforms
+- **Physics Simulation**: Custom gravity, collision detection, and momentum-based movement
+- **Advanced Levels**: Floating platforms, slopes, curves, and 3D puzzle mechanics
+- **Camera**: Predictive following with velocity-based smoothness adjustments
 - **Coin Collection**: Walk into golden coins to collect them automatically
 - **Key Collection**: Walk into orange key to unlock the exit
 - **Level Goal**: Collect key, then reach the goal tile to complete the level
