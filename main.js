@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { io } from 'socket.io-client';
-import soundManager from '/sounds/soundManager.js';
+import soundManager from './src/systems/soundManager.js';
 
 // Game configuration
 let gameConfig = null;
