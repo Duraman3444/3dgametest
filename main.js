@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { io } from 'socket.io-client';
-import soundManager from './public/sounds/soundManager.js';
+import soundManager from '/sounds/soundManager.js';
 
 // Game configuration
 let gameConfig = null;
@@ -2075,31 +2075,7 @@ function addLevelChallenge() {
     }
 }
 
-// Function to restart game
-function restartGame() {
-    gameScore.currentLevel = 1;
-    gameScore.totalScore = 0;
-    gameScore.hasKey = false;
-    gameScore.levelComplete = false;
-    gameScore.coins = 0;
-    gameScore.lives = gameScore.maxLives;
-    
-    // Reset timer
-    resetTimer();
-    
-    generateNewLevel(15);
-    
-    const messageElement = document.getElementById('message');
-    if (messageElement) {
-        messageElement.textContent = 'Game restarted! Level 1 - Find the key and reach the goal!';
-        messageElement.style.color = '#00ccff';
-        setTimeout(() => {
-            messageElement.textContent = '';
-        }, 3000);
-    }
-    
-    updateScoreDisplay();
-}
+// Function to restart game - moved to prevent duplicate declaration
 
 // Function to show key collection effect
 function showKeyCollectionEffect() {
@@ -6685,7 +6661,6 @@ window.cameraSystem = cameraSystem;
 // Make pause menu functions globally accessible
 window.togglePauseMenu = togglePauseMenu;
 window.resumeGame = resumeGame;
-window.restartGame = restartGame;
 window.exitGame = exitGame;
 
 // Make victory screen functions globally accessible
