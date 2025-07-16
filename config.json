@@ -52,7 +52,18 @@
     "lowJumpMultiplier": 2.2,
     "terminalVelocity": 15,
     "momentumPreservation": 0.75,
-    "precisionThreshold": 0.05
+    "precisionThreshold": 0.05,
+    "maxAirborneTime": 5.0,
+    "invertedWorldOffset": -30,
+    "invertedWorldTransitionCooldown": 2000,
+    "fallThreshold": -20,
+    "velocityThreshold": -5,
+    "collisionRayCount": 5,
+    "collisionRaySpread": 0.3,
+    "groundCheckDistance": 1.2,
+    "surfaceSnapDistance": 0.15,
+    "safePositionRadius": 2.0,
+    "safePositionHeight": 1.0
   },
   "visual": {
     "animationSpeed": 2,

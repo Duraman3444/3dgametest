@@ -1,491 +1,290 @@
 [
     {
-        "name": "Tutorial",
+        "name": "Level 1 - Coin and Key Intro",
         "number": 1,
         "gridSize": 10,
         "playerStart": { "x": 1, "z": 1 },
         "tiles": "auto",
+        "requireAllCoins": true,
         "objects": [
             { "type": "coin", "x": 3, "z": 3 },
             { "type": "coin", "x": 5, "z": 5 },
             { "type": "coin", "x": 7, "z": 7 },
+            { "type": "coin", "x": 2, "z": 8 },
+            { "type": "coin", "x": 8, "z": 2 },
             { "type": "key", "x": 8, "z": 8 },
             { "type": "goal", "x": 9, "z": 9 }
         ]
     },
     {
-        "name": "The Maze",
+        "name": "Level 2 - Bounce Pads",
         "number": 2,
-        "gridSize": 10,
-        "playerStart": { "x": 0, "z": 0 },
-        "tiles": "auto",
-        "objects": [
-            { "type": "coin", "x": 2, "z": 2 },
-            { "type": "coin", "x": 4, "z": 6 },
-            { "type": "coin", "x": 6, "z": 4 },
-            { "type": "coin", "x": 8, "z": 2 },
-            { "type": "spikeTrap", "x": 3, "z": 3 },
-            { "type": "spikeTrap", "x": 5, "z": 5 },
-            { "type": "teleporter", "x": 2, "z": 8, "pairId": 1, "destination": { "x": 8, "z": 8 } },
-            { "type": "teleporter", "x": 8, "z": 8, "pairId": 1, "destination": { "x": 2, "z": 8 } },
-            { "type": "key", "x": 7, "z": 7 },
-            { "type": "goal", "x": 9, "z": 9 }
-        ]
-    },
-    {
-        "name": "Platform Challenge",
-        "number": 3,
-        "gridSize": 10,
+        "gridSize": 12,
         "playerStart": { "x": 1, "z": 1 },
         "tiles": "auto",
+        "requireAllCoins": false,
         "objects": [
-            { "type": "coin", "x": 3, "z": 1 },
-            { "type": "coin", "x": 5, "z": 3 },
-            { "type": "coin", "x": 7, "z": 5 },
-            { "type": "coin", "x": 9, "z": 7 },
-            { "type": "bouncingPlatform", "x": 2, "z": 2 },
-            { "type": "bouncingPlatform", "x": 4, "z": 4 },
-            { "type": "bouncingPlatform", "x": 6, "z": 6 },
-            { "type": "spikeTrap", "x": 3, "z": 7 },
-            { "type": "spikeTrap", "x": 5, "z": 9 },
-            { "type": "key", "x": 8, "z": 8 },
-            { "type": "goal", "x": 9, "z": 9 }
+            { "type": "coin", "x": 3, "z": 3 },
+            { "type": "coin", "x": 7, "z": 7 },
+            { "type": "coin", "x": 9, "z": 4 },
+            { "type": "coin", "x": 4, "z": 9 },
+            { "type": "bouncingPlatform", "x": 5, "z": 2 },
+            { "type": "bouncingPlatform", "x": 2, "z": 6 },
+            { "type": "bouncingPlatform", "x": 8, "z": 5 },
+            { "type": "bouncingPlatform", "x": 6, "z": 8 },
+            { "type": "key", "x": 10, "z": 10 },
+            { "type": "goal", "x": 11, "z": 11 }
         ]
     },
     {
-        "name": "Floating Islands",
+        "name": "Level 3 - Spikes",
+        "number": 3,
+        "gridSize": 14,
+        "playerStart": { "x": 1, "z": 1 },
+        "tiles": "auto",
+        "requireAllCoins": false,
+        "objects": [
+            { "type": "coin", "x": 3, "z": 2 },
+            { "type": "coin", "x": 7, "z": 5 },
+            { "type": "coin", "x": 10, "z": 8 },
+            { "type": "coin", "x": 5, "z": 11 },
+            { "type": "spikeTrap", "x": 4, "z": 4 },
+            { "type": "spikeTrap", "x": 6, "z": 6 },
+            { "type": "spikeTrap", "x": 8, "z": 8 },
+            { "type": "spikeTrap", "x": 9, "z": 4 },
+            { "type": "spikeTrap", "x": 4, "z": 9 },
+            { "type": "key", "x": 12, "z": 12 },
+            { "type": "goal", "x": 13, "z": 13 }
+        ]
+    },
+    {
+        "name": "Level 4 - Holes in Floor",
         "number": 4,
         "gridSize": 16,
-        "playerStart": { "x": 1, "z": 1, "y": 0 },
-        "use3D": true,
-        "platforms": [
-            {
-                "type": "floating",
-                "position": { "x": 2, "y": 0, "z": 2 },
-                "size": { "width": 4, "height": 0.5, "depth": 4 },
-                "material": "stone",
-                "surfaces": ["top"]
-            },
-            {
-                "type": "floating",
-                "position": { "x": 8, "y": 2, "z": 4 },
-                "size": { "width": 3, "height": 0.5, "depth": 3 },
-                "material": "metal",
-                "surfaces": ["top", "bottom"]
-            },
-            {
-                "type": "floating",
-                "position": { "x": 4, "y": 4, "z": 8 },
-                "size": { "width": 2, "height": 0.5, "depth": 2 },
-                "material": "crystal",
-                "surfaces": ["top"]
-            },
-            {
-                "type": "angled",
-                "position": { "x": 6, "y": 1, "z": 6 },
-                "size": { "width": 4, "height": 0.5, "depth": 4 },
-                "rotation": { "x": 0, "y": 0, "z": 15 },
-                "material": "wood",
-                "surfaces": ["top"]
-            },
-            {
-                "type": "moving",
-                "position": { "x": 10, "y": 3, "z": 10 },
-                "size": { "width": 2, "height": 0.5, "depth": 2 },
-                "material": "energy",
-                "surfaces": ["top"],
-                "movement": {
-                    "type": "linear",
-                    "path": [
-                        { "x": 10, "y": 3, "z": 10 },
-                        { "x": 14, "y": 3, "z": 10 },
-                        { "x": 14, "y": 3, "z": 14 },
-                        { "x": 10, "y": 3, "z": 14 }
-                    ],
-                    "speed": 2,
-                    "loop": true
-                }
-            }
-        ],
+        "playerStart": { "x": 1, "z": 1 },
+        "tiles": "auto",
+        "requireAllCoins": false,
+        "hasUnderworld": true,
         "objects": [
-            { "type": "coin", "position": { "x": 2, "y": 1, "z": 2 } },
-            { "type": "coin", "position": { "x": 8, "y": 3, "z": 4 } },
-            { "type": "coin", "position": { "x": 4, "y": 5, "z": 8 } },
-            { "type": "key", "position": { "x": 6, "y": 2, "z": 6 } },
-            { "type": "goal", "position": { "x": 12, "y": 4, "z": 12 } },
-            {
-                "type": "disappearingTile",
-                "position": { "x": 5, "y": 2, "z": 5 },
-                "size": { "width": 2, "height": 0.2, "depth": 2 },
-                "delay": 1000,
-                "duration": 3000
-            },
-            {
-                "type": "pressurePlate",
-                "position": { "x": 3, "y": 1, "z": 3 },
-                "size": { "width": 1, "height": 0.1, "depth": 1 },
-                "triggers": [
-                    {
-                        "type": "platform",
-                        "target": "bridge_1",
-                        "action": "activate"
-                    }
-                ]
-            }
+            { "type": "coin", "x": 3, "z": 3 },
+            { "type": "coin", "x": 8, "z": 5 },
+            { "type": "coin", "x": 12, "z": 8 },
+            { "type": "coin", "x": 5, "z": 12 },
+            { "type": "hole", "x": 6, "z": 6 },
+            { "type": "hole", "x": 9, "z": 9 },
+            { "type": "hole", "x": 11, "z": 4 },
+            { "type": "hole", "x": 4, "z": 11 },
+            { "type": "key", "x": 14, "z": 14 },
+            { "type": "goal", "x": 15, "z": 15 }
         ],
-        "gravityPlanes": [
-            {
-                "position": { "x": 0, "y": 0, "z": 0 },
-                "normal": { "x": 0, "y": 1, "z": 0 },
-                "strength": 1.0
-            },
-            {
-                "position": { "x": 15, "y": 0, "z": 8 },
-                "normal": { "x": -1, "y": 0, "z": 0 },
-                "strength": 1.0,
-                "radius": 8
-            }
-        ]
+        "underworld": {
+            "playerStart": { "x": 8, "z": 8 },
+            "objects": [
+                { "type": "coin", "x": 6, "z": 6 },
+                { "type": "coin", "x": 10, "z": 10 },
+                { "type": "underworldExit", "x": 2, "z": 2 },
+                { "type": "underworldExit", "x": 14, "z": 14 }
+            ]
+        }
     },
     {
-        "name": "Kula World Challenge",
+        "name": "Level 5 - Combo Level",
         "number": 5,
+        "gridSize": 18,
+        "playerStart": { "x": 1, "z": 1 },
+        "tiles": "auto",
+        "requireAllCoins": false,
+        "hasUnderworld": true,
+        "objects": [
+            { "type": "coin", "x": 3, "z": 3 },
+            { "type": "coin", "x": 9, "z": 6 },
+            { "type": "coin", "x": 15, "z": 9 },
+            { "type": "coin", "x": 6, "z": 15 },
+            { "type": "bouncingPlatform", "x": 5, "z": 3 },
+            { "type": "bouncingPlatform", "x": 11, "z": 7 },
+            { "type": "bouncingPlatform", "x": 7, "z": 13 },
+            { "type": "spikeTrap", "x": 8, "z": 8 },
+            { "type": "spikeTrap", "x": 12, "z": 12 },
+            { "type": "spikeTrap", "x": 4, "z": 14 },
+            { "type": "hole", "x": 10, "z": 5 },
+            { "type": "hole", "x": 13, "z": 10 },
+            { "type": "hole", "x": 5, "z": 13 },
+            { "type": "key", "x": 16, "z": 16 },
+            { "type": "goal", "x": 17, "z": 17 }
+        ],
+        "underworld": {
+            "playerStart": { "x": 9, "z": 9 },
+            "objects": [
+                { "type": "coin", "x": 7, "z": 7 },
+                { "type": "coin", "x": 11, "z": 11 },
+                { "type": "underworldExit", "x": 3, "z": 3 },
+                { "type": "underworldExit", "x": 15, "z": 15 }
+            ]
+        }
+    },
+    {
+        "name": "Level 6 - Tower Climb",
+        "number": 6,
         "gridSize": 20,
-        "playerStart": { "x": 2, "z": 2, "y": 0 },
+        "playerStart": { "x": 10, "z": 10, "y": 0 },
         "use3D": true,
+        "requireAllCoins": false,
+        "hasUnderworld": true,
         "platforms": [
             {
                 "type": "floating",
-                "position": { "x": 0, "y": 0, "z": 0 },
+                "position": { "x": 10, "y": 0, "z": 10 },
+                "size": { "width": 8, "height": 0.5, "depth": 8 },
+                "material": "stone",
+                "surfaces": ["top"]
+            },
+            {
+                "type": "floating",
+                "position": { "x": 10, "y": 5, "z": 10 },
                 "size": { "width": 6, "height": 0.5, "depth": 6 },
                 "material": "stone",
                 "surfaces": ["top"]
             },
             {
-                "type": "curved",
-                "position": { "x": 8, "y": 2, "z": 4 },
-                "size": { "width": 6, "height": 0.5, "depth": 6 },
-                "material": "metal",
-                "surfaces": ["top"],
-                "curvature": {
-                    "type": "cylinder",
-                    "radius": 4,
-                    "segments": 16
-                }
+                "type": "floating",
+                "position": { "x": 10, "y": 10, "z": 10 },
+                "size": { "width": 4, "height": 0.5, "depth": 4 },
+                "material": "stone",
+                "surfaces": ["top"]
             },
             {
-                "type": "spiral",
-                "position": { "x": 16, "y": 0, "z": 12 },
-                "size": { "width": 8, "height": 6, "depth": 8 },
-                "material": "crystal",
-                "surfaces": ["top"],
-                "spiral": {
-                    "turns": 2,
-                    "segments": 32,
-                    "innerRadius": 1,
-                    "outerRadius": 4
-                }
+                "type": "floating",
+                "position": { "x": 10, "y": 15, "z": 10 },
+                "size": { "width": 2, "height": 0.5, "depth": 2 },
+                "material": "stone",
+                "surfaces": ["top"]
             },
             {
                 "type": "moving",
-                "position": { "x": 4, "y": 4, "z": 8 },
+                "position": { "x": 6, "y": 3, "z": 10 },
                 "size": { "width": 2, "height": 0.5, "depth": 2 },
-                "material": "energy",
+                "material": "metal",
                 "surfaces": ["top"],
-                "movement": {
-                    "type": "circular",
-                    "center": { "x": 6, "y": 4, "z": 10 },
-                    "radius": 3,
-                    "speed": 1,
-                    "axis": "y"
-                }
-            }
-        ],
-        "objects": [
-            { "type": "coin", "position": { "x": 2, "y": 1, "z": 2 } },
-            { "type": "coin", "position": { "x": 8, "y": 3, "z": 4 } },
-            { "type": "coin", "position": { "x": 10, "y": 3, "z": 6 } },
-            { "type": "coin", "position": { "x": 16, "y": 3, "z": 12 } },
-            { "type": "coin", "position": { "x": 18, "y": 5, "z": 14 } },
-            { "type": "key", "position": { "x": 16, "y": 6, "z": 16 } },
-            { "type": "goal", "position": { "x": 6, "y": 5, "z": 10 } },
-            {
-                "type": "timedSpike",
-                "position": { "x": 6, "y": 1, "z": 6 },
-                "size": { "width": 1, "height": 0.5, "depth": 1 },
-                "timing": {
-                    "interval": 2000,
-                    "duration": 1000,
-                    "offset": 0
-                }
-            },
-            {
-                "type": "movingSpike",
-                "position": { "x": 12, "y": 2, "z": 8 },
-                "size": { "width": 0.5, "height": 1, "depth": 0.5 },
                 "movement": {
                     "type": "linear",
                     "path": [
-                        { "x": 12, "y": 2, "z": 8 },
-                        { "x": 14, "y": 2, "z": 8 }
+                        { "x": 6, "y": 3, "z": 10 },
+                        { "x": 14, "y": 3, "z": 10 }
                     ],
                     "speed": 1.5,
                     "loop": true
                 }
             },
             {
-                "type": "gravityChanger",
-                "position": { "x": 14, "y": 1, "z": 4 },
-                "size": { "width": 2, "height": 0.2, "depth": 2 },
-                "newGravity": { "x": 1, "y": 0, "z": 0 },
-                "duration": 5000
+                "type": "moving",
+                "position": { "x": 10, "y": 8, "z": 6 },
+                "size": { "width": 2, "height": 0.5, "depth": 2 },
+                "material": "metal",
+                "surfaces": ["top"],
+                "movement": {
+                    "type": "linear",
+                    "path": [
+                        { "x": 10, "y": 8, "z": 6 },
+                        { "x": 10, "y": 8, "z": 14 }
+                    ],
+                    "speed": 1.5,
+                    "loop": true
+                }
+            },
+            {
+                "type": "moving",
+                "position": { "x": 8, "y": 13, "z": 10 },
+                "size": { "width": 2, "height": 0.5, "depth": 2 },
+                "material": "metal",
+                "surfaces": ["top"],
+                "movement": {
+                    "type": "circular",
+                    "center": { "x": 10, "y": 13, "z": 10 },
+                    "radius": 2,
+                    "speed": 0.8,
+                    "axis": "y"
+                }
             }
         ],
-        "gravityPlanes": [
-            {
-                "position": { "x": 0, "y": 0, "z": 0 },
-                "normal": { "x": 0, "y": 1, "z": 0 },
-                "strength": 1.0
-            },
-            {
-                "position": { "x": 20, "y": 0, "z": 10 },
-                "normal": { "x": -1, "y": 0, "z": 0 },
-                "strength": 1.0,
-                "radius": 10
-            },
-            {
-                "position": { "x": 10, "y": 0, "z": 20 },
-                "normal": { "x": 0, "y": 0, "z": -1 },
-                "strength": 1.0,
-                "radius": 8
-            }
-        ]
-    },
-    {
-        "name": "Final Boss",
-        "number": 4,
-        "gridSize": 10,
-        "playerStart": { "x": 0, "z": 0 },
-        "tiles": "auto",
         "objects": [
-            { "type": "coin", "x": 1, "z": 1 },
-            { "type": "coin", "x": 2, "z": 2 },
-            { "type": "coin", "x": 3, "z": 3 },
-            { "type": "coin", "x": 4, "z": 4 },
-            { "type": "coin", "x": 5, "z": 5 },
-            { "type": "coin", "x": 6, "z": 6 },
-            { "type": "spikeTrap", "x": 1, "z": 3 },
-            { "type": "spikeTrap", "x": 3, "z": 5 },
-            { "type": "spikeTrap", "x": 5, "z": 7 },
-            { "type": "spikeTrap", "x": 7, "z": 3 },
-            { "type": "spikeTrap", "x": 2, "z": 6 },
-            { "type": "teleporter", "x": 1, "z": 8, "pairId": 1, "destination": { "x": 8, "z": 1 } },
-            { "type": "teleporter", "x": 8, "z": 1, "pairId": 1, "destination": { "x": 1, "z": 8 } },
-            { "type": "bouncingPlatform", "x": 4, "z": 8 },
-            { "type": "bouncingPlatform", "x": 6, "z": 2 },
-            { "type": "key", "x": 7, "z": 7 },
-            { "type": "goal", "x": 9, "z": 9 }
+            { "type": "coin", "position": { "x": 12, "y": 1, "z": 12 } },
+            { "type": "coin", "position": { "x": 8, "y": 6, "z": 8 } },
+            { "type": "coin", "position": { "x": 12, "y": 11, "z": 12 } },
+            { "type": "coin", "position": { "x": 10, "y": 16, "z": 10 } },
+            { "type": "bouncingPlatform", "position": { "x": 7, "y": 1, "z": 7 } },
+            { "type": "bouncingPlatform", "position": { "x": 13, "y": 6, "z": 13 } },
+            { "type": "bouncingPlatform", "position": { "x": 7, "y": 11, "z": 13 } },
+            { "type": "key", "position": { "x": 10, "y": 16, "z": 10 } },
+            { "type": "goal", "position": { "x": 10, "y": 18, "z": 10 } }
         ]
     },
     {
-        "name": "Broken Bridge",
-        "number": 5,
-        "gridSize": 10,
-        "playerStart": { "x": 0, "z": 0 },
-        "tiles": "auto",
-        "objects": [
-            { "type": "coin", "x": 2, "z": 1 },
-            { "type": "coin", "x": 4, "z": 2 },
-            { "type": "coin", "x": 6, "z": 3 },
-            { "type": "coin", "x": 8, "z": 4 },
-            { "type": "brokenTile", "x": 1, "z": 2 },
-            { "type": "brokenTile", "x": 3, "z": 4 },
-            { "type": "brokenTile", "x": 5, "z": 6 },
-            { "type": "brokenTile", "x": 7, "z": 8 },
-            { "type": "brokenTile", "x": 2, "z": 7 },
-            { "type": "staticWall", "x": 1, "z": 5, "height": 1 },
-            { "type": "staticWall", "x": 3, "z": 7, "height": 1 },
-            { "type": "staticWall", "x": 5, "z": 9, "height": 1 },
-            { "type": "spikeTrap", "x": 4, "z": 5 },
-            { "type": "key", "x": 6, "z": 8 },
-            { "type": "goal", "x": 9, "z": 9 }
-        ]
-    },
-    {
-        "name": "The Gauntlet",
-        "number": 6,
-        "gridSize": 10,
-        "playerStart": { "x": 0, "z": 0 },
-        "tiles": "auto",
-        "objects": [
-            { "type": "coin", "x": 1, "z": 4 },
-            { "type": "coin", "x": 3, "z": 8 },
-            { "type": "coin", "x": 7, "z": 2 },
-            { "type": "coin", "x": 8, "z": 6 },
-            { "type": "movingObstacle", "x": 2, "z": 1, "endX": 2, "endZ": 8, "speed": 1 },
-            { "type": "movingObstacle", "x": 4, "z": 9, "endX": 4, "endZ": 2, "speed": 1.5 },
-            { "type": "movingObstacle", "x": 6, "z": 0, "endX": 6, "endZ": 7, "speed": 0.8 },
-            { "type": "staticWall", "x": 1, "z": 1, "height": 2 },
-            { "type": "staticWall", "x": 1, "z": 2, "height": 2 },
-            { "type": "staticWall", "x": 5, "z": 4, "height": 2 },
-            { "type": "staticWall", "x": 5, "z": 5, "height": 2 },
-            { "type": "staticWall", "x": 7, "z": 7, "height": 2 },
-            { "type": "staticWall", "x": 8, "z": 7, "height": 2 },
-            { "type": "brokenTile", "x": 3, "z": 3 },
-            { "type": "brokenTile", "x": 6, "z": 6 },
-            { "type": "spikeTrap", "x": 2, "z": 5 },
-            { "type": "key", "x": 9, "z": 1 },
-            { "type": "goal", "x": 9, "z": 9 }
-        ]
-    },
-    {
-        "name": "Maze Runner",
+        "name": "Level 7 - Jungle Biome",
         "number": 7,
-        "gridSize": 10,
-        "playerStart": { "x": 0, "z": 0 },
-        "tiles": "auto",
-        "objects": [
-            { "type": "coin", "x": 2, "z": 2 },
-            { "type": "coin", "x": 4, "z": 6 },
-            { "type": "coin", "x": 6, "z": 4 },
-            { "type": "coin", "x": 8, "z": 8 },
-            { "type": "staticWall", "x": 1, "z": 1, "height": 1 },
-            { "type": "staticWall", "x": 1, "z": 3, "height": 1 },
-            { "type": "staticWall", "x": 1, "z": 5, "height": 1 },
-            { "type": "staticWall", "x": 3, "z": 1, "height": 1 },
-            { "type": "staticWall", "x": 3, "z": 3, "height": 1 },
-            { "type": "staticWall", "x": 5, "z": 1, "height": 1 },
-            { "type": "staticWall", "x": 5, "z": 3, "height": 1 },
-            { "type": "staticWall", "x": 5, "z": 5, "height": 1 },
-            { "type": "staticWall", "x": 7, "z": 1, "height": 1 },
-            { "type": "staticWall", "x": 7, "z": 3, "height": 1 },
-            { "type": "staticWall", "x": 7, "z": 5, "height": 1 },
-            { "type": "staticWall", "x": 7, "z": 7, "height": 1 },
-            { "type": "brokenTile", "x": 2, "z": 4 },
-            { "type": "brokenTile", "x": 4, "z": 2 },
-            { "type": "brokenTile", "x": 6, "z": 6 },
-            { "type": "movingObstacle", "x": 0, "z": 7, "endX": 9, "endZ": 7, "speed": 1.2 },
-            { "type": "spikeTrap", "x": 2, "z": 6 },
-            { "type": "spikeTrap", "x": 4, "z": 8 },
-            { "type": "teleporter", "x": 0, "z": 9, "pairId": 1, "destination": { "x": 9, "z": 0 } },
-            { "type": "teleporter", "x": 9, "z": 0, "pairId": 1, "destination": { "x": 0, "z": 9 } },
-            { "type": "key", "x": 8, "z": 2 },
-            { "type": "goal", "x": 9, "z": 9 }
-        ]
-    },
-    {
-        "name": "Ultimate Challenge",
-        "number": 8,
-        "gridSize": 10,
-        "playerStart": { "x": 0, "z": 0 },
-        "tiles": "auto",
-        "objects": [
-            { "type": "coin", "x": 1, "z": 2 },
-            { "type": "coin", "x": 3, "z": 4 },
-            { "type": "coin", "x": 5, "z": 6 },
-            { "type": "coin", "x": 7, "z": 8 },
-            { "type": "coin", "x": 8, "z": 1 },
-            { "type": "brokenTile", "x": 2, "z": 3 },
-            { "type": "brokenTile", "x": 4, "z": 5 },
-            { "type": "brokenTile", "x": 6, "z": 7 },
-            { "type": "brokenTile", "x": 1, "z": 8 },
-            { "type": "brokenTile", "x": 8, "z": 3 },
-            { "type": "staticWall", "x": 2, "z": 1, "height": 1 },
-            { "type": "staticWall", "x": 2, "z": 2, "height": 1 },
-            { "type": "staticWall", "x": 4, "z": 2, "height": 1 },
-            { "type": "staticWall", "x": 4, "z": 3, "height": 1 },
-            { "type": "staticWall", "x": 6, "z": 4, "height": 1 },
-            { "type": "staticWall", "x": 6, "z": 5, "height": 1 },
-            { "type": "staticWall", "x": 8, "z": 6, "height": 1 },
-            { "type": "staticWall", "x": 8, "z": 7, "height": 1 },
-            { "type": "movingObstacle", "x": 0, "z": 4, "endX": 9, "endZ": 4, "speed": 1.5 },
-            { "type": "movingObstacle", "x": 3, "z": 0, "endX": 3, "endZ": 9, "speed": 1.0 },
-            { "type": "movingObstacle", "x": 7, "z": 9, "endX": 7, "endZ": 0, "speed": 0.8 },
-            { "type": "spikeTrap", "x": 1, "z": 5 },
-            { "type": "spikeTrap", "x": 5, "z": 1 },
-            { "type": "spikeTrap", "x": 9, "z": 5 },
-            { "type": "spikeTrap", "x": 5, "z": 9 },
-            { "type": "bouncingPlatform", "x": 2, "z": 6 },
-            { "type": "bouncingPlatform", "x": 6, "z": 2 },
-            { "type": "teleporter", "x": 1, "z": 7, "pairId": 1, "destination": { "x": 7, "z": 1 } },
-            { "type": "teleporter", "x": 7, "z": 1, "pairId": 1, "destination": { "x": 1, "z": 7 } },
-            { "type": "key", "x": 9, "z": 8 },
-            { "type": "goal", "x": 9, "z": 9 }
-        ]
-    },
-    {
-        "name": "Tile Types Demo",
-        "number": 9,
-        "gridSize": 6,
-        "playerStart": { "x": 0, "z": 0 },
-        "tileTypes": [
-            ["normal", "normal", "broken", "normal", "normal", "obstacle"],
-            ["normal", "obstacle", "normal", "normal", "broken", "normal"],
-            ["broken", "normal", "normal", "obstacle", "normal", "normal"],
-            ["normal", "normal", "obstacle", "normal", "normal", "broken"],
-            ["normal", "broken", "normal", "normal", "obstacle", "normal"],
-            ["obstacle", "normal", "normal", "broken", "normal", "goal"]
+        "gridSize": 22,
+        "playerStart": { "x": 11, "z": 11, "y": 0 },
+        "use3D": true,
+        "requireAllCoins": false,
+        "hasUnderworld": true,
+        "isJungle": true,
+        "platforms": [
+            {
+                "type": "floating",
+                "position": { "x": 11, "y": 0, "z": 11 },
+                "size": { "width": 10, "height": 0.5, "depth": 10 },
+                "material": "jungle_floor",
+                "surfaces": ["top"]
+            },
+            {
+                "type": "floating",
+                "position": { "x": 5, "y": 2, "z": 5 },
+                "size": { "width": 4, "height": 0.5, "depth": 4 },
+                "material": "jungle_wood",
+                "surfaces": ["top"]
+            },
+            {
+                "type": "floating",
+                "position": { "x": 17, "y": 3, "z": 17 },
+                "size": { "width": 4, "height": 0.5, "depth": 4 },
+                "material": "jungle_wood",
+                "surfaces": ["top"]
+            },
+            {
+                "type": "floating",
+                "position": { "x": 7, "y": 5, "z": 15 },
+                "size": { "width": 3, "height": 0.5, "depth": 3 },
+                "material": "jungle_wood",
+                "surfaces": ["top"]
+            },
+            {
+                "type": "floating",
+                "position": { "x": 15, "y": 7, "z": 7 },
+                "size": { "width": 3, "height": 0.5, "depth": 3 },
+                "material": "jungle_wood",
+                "surfaces": ["top"]
+            },
+            {
+                "type": "moving",
+                "position": { "x": 11, "y": 4, "z": 11 },
+                "size": { "width": 2, "height": 0.5, "depth": 2 },
+                "material": "jungle_vine",
+                "surfaces": ["top"],
+                "movement": {
+                    "type": "oscillate",
+                    "axis": "y",
+                    "amplitude": 3,
+                    "frequency": 0.5
+                }
+            }
         ],
         "objects": [
-            { "type": "coin", "x": 1, "z": 0 },
-            { "type": "coin", "x": 3, "z": 1 },
-            { "type": "coin", "x": 4, "z": 3 },
-            { "type": "key", "x": 2, "z": 4 }
-        ]
-    },
-    {
-        "name": "Obstacle Course",
-        "number": 10,
-        "gridSize": 8,
-        "playerStart": { "x": 0, "z": 0 },
-        "tileTypes": [
-            ["normal", "normal", "obstacle", "normal", "normal", "obstacle", "normal", "normal"],
-            ["normal", "obstacle", "normal", "normal", "broken", "normal", "obstacle", "normal"],
-            ["broken", "normal", "normal", "obstacle", "normal", "normal", "normal", "broken"],
-            ["normal", "normal", "obstacle", "normal", "normal", "obstacle", "normal", "normal"],
-            ["normal", "broken", "normal", "normal", "obstacle", "normal", "broken", "normal"],
-            ["obstacle", "normal", "normal", "broken", "normal", "normal", "normal", "obstacle"],
-            ["normal", "normal", "obstacle", "normal", "normal", "broken", "normal", "normal"],
-            ["normal", "obstacle", "normal", "normal", "broken", "normal", "normal", "goal"]
-        ],
-        "objects": [
-            { "type": "coin", "x": 1, "z": 0 },
-            { "type": "coin", "x": 3, "z": 2 },
-            { "type": "coin", "x": 5, "z": 4 },
-            { "type": "coin", "x": 7, "z": 6 },
-            { "type": "key", "x": 6, "z": 1 },
-            { "type": "spikeTrap", "x": 2, "z": 3 },
-            { "type": "spikeTrap", "x": 4, "z": 5 }
-        ]
-    },
-    {
-        "name": "Puzzle Master",
-        "number": 11,
-        "gridSize": 10,
-        "playerStart": { "x": 0, "z": 0 },
-        "tileTypes": [
-            ["normal", "obstacle", "normal", "normal", "broken", "normal", "obstacle", "normal", "normal", "broken"],
-            ["normal", "normal", "obstacle", "broken", "normal", "normal", "normal", "obstacle", "broken", "normal"],
-            ["broken", "normal", "normal", "normal", "obstacle", "broken", "normal", "normal", "normal", "obstacle"],
-            ["normal", "obstacle", "normal", "broken", "normal", "normal", "obstacle", "normal", "broken", "normal"],
-            ["normal", "normal", "broken", "normal", "normal", "obstacle", "normal", "broken", "normal", "normal"],
-            ["obstacle", "normal", "normal", "obstacle", "normal", "normal", "normal", "normal", "obstacle", "normal"],
-            ["normal", "broken", "normal", "normal", "broken", "normal", "normal", "obstacle", "normal", "broken"],
-            ["normal", "normal", "obstacle", "normal", "normal", "broken", "normal", "normal", "normal", "normal"],
-            ["broken", "normal", "normal", "normal", "obstacle", "normal", "normal", "broken", "normal", "obstacle"],
-            ["normal", "obstacle", "normal", "broken", "normal", "normal", "obstacle", "normal", "normal", "goal"]
-        ],
-        "objects": [
-            { "type": "coin", "x": 2, "z": 0 },
-            { "type": "coin", "x": 4, "z": 2 },
-            { "type": "coin", "x": 6, "z": 4 },
-            { "type": "coin", "x": 8, "z": 6 },
-            { "type": "coin", "x": 1, "z": 8 },
-            { "type": "movingObstacle", "x": 3, "z": 1, "endX": 3, "endZ": 7, "speed": 1 },
-            { "type": "movingObstacle", "x": 7, "z": 9, "endX": 7, "endZ": 3, "speed": 1.2 },
-            { "type": "teleporter", "x": 1, "z": 5, "pairId": 1, "destination": { "x": 8, "z": 1 } },
-            { "type": "teleporter", "x": 8, "z": 1, "pairId": 1, "destination": { "x": 1, "z": 5 } },
-            { "type": "key", "x": 5, "z": 8 }
+            { "type": "coin", "position": { "x": 5, "y": 3, "z": 5 } },
+            { "type": "coin", "position": { "x": 17, "y": 4, "z": 17 } },
+            { "type": "coin", "position": { "x": 7, "y": 6, "z": 15 } },
+            { "type": "coin", "position": { "x": 15, "y": 8, "z": 7 } },
+            { "type": "coin", "position": { "x": 11, "y": 8, "z": 11 } },
+            { "type": "key", "position": { "x": 19, "y": 1, "z": 19 } },
+            { "type": "goal", "position": { "x": 21, "y": 1, "z": 21 } }
         ]
     }
 ] 

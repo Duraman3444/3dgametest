@@ -25,11 +25,43 @@
         }
         #controls {
             position: absolute;
-            bottom: 10px;
-            left: 10px;
+            top: 20px;
+            left: 20px;
             color: white;
             font-size: 14px;
             z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 15px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            max-width: 400px;
+            max-height: 80vh;
+            overflow-y: auto;
+            display: none; /* Hidden by default */
+        }
+        
+        #controls.show {
+            display: block;
+        }
+        
+        #controls-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            padding: 8px 12px;
+            backdrop-filter: blur(3px);
+        }
+        
+        #controls-hint.hide {
+            display: none;
         }
         
         /* Achievement Notification Styles */
@@ -412,7 +444,6 @@
             justify-content: center;
             align-items: center;
             z-index: 2000;
-            transition: opacity 0.3s ease;
         }
         
         .lobby-overlay.hidden {
@@ -670,7 +701,6 @@
             justify-content: center;
             align-items: center;
             z-index: 3000;
-            transition: opacity 0.3s ease;
         }
         
         .voting-overlay.hidden {
@@ -847,14 +877,7 @@
             font-family: 'Arial', sans-serif;
         }
         
-        /* HUD Element Transitions */
-        .hud-element {
-            transition: all 0.3s ease;
-        }
-        
-        .hud-stat {
-            transition: all 0.2s ease;
-        }
+        /* HUD Element Transitions removed */
         
         .hud-stat.animate-score {
             animation: scoreIncrease 0.5s ease;
@@ -1053,7 +1076,6 @@
             font-weight: bold;
             font-family: 'Courier New', monospace;
             text-shadow: 0 0 5px currentColor;
-            transition: all 0.3s ease;
         }
         
         .stat-separator {
@@ -1098,7 +1120,6 @@
             min-width: 200px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
             opacity: 0;
-            transition: opacity 0.3s ease;
             text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
         }
         
@@ -1187,7 +1208,6 @@
             align-items: center;
             z-index: 2000;
             backdrop-filter: blur(5px);
-            transition: all 0.3s ease;
         }
         
         .pause-menu.hidden {
@@ -1203,19 +1223,9 @@
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
             border: 2px solid #333;
             text-align: center;
-            animation: pauseMenuSlideIn 0.3s ease-out;
         }
         
-        @keyframes pauseMenuSlideIn {
-            from {
-                transform: translateY(-50px);
-                opacity: 0;
-            }
-            to {
-                transform: translateY(0);
-                opacity: 1;
-            }
-        }
+        /* Pause menu slide-in animation removed */
         
         .pause-menu-header {
             margin-bottom: 30px;
@@ -1336,7 +1346,6 @@
              z-index: 3000;
              opacity: 1;
              visibility: visible;
-             transition: all 0.5s ease;
          }
          
          .victory-screen.hidden {
@@ -1353,19 +1362,9 @@
              overflow-y: auto;
              box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
              border: 2px solid #444;
-             animation: victorySlideIn 0.8s ease-out;
          }
          
-         @keyframes victorySlideIn {
-             from {
-                 transform: translateY(-100px) scale(0.8);
-                 opacity: 0;
-             }
-             to {
-                 transform: translateY(0) scale(1);
-                 opacity: 1;
-             }
-         }
+         /* Victory slide-in animation removed */
          
          .victory-header {
              text-align: center;
@@ -1662,7 +1661,7 @@
     </div>
     <div id="controls">
         <p>Arrow keys / WASD: Free-directional rolling movement with realistic physics</p>
-        <p>Space: Jump with physics | N: Restart game | M: Cheat (get key) | P: Pause menu | ESC: Level menu</p>
+        <p>Space: Jump with physics (grounded only) | J: Toggle jump debug | F: Test fall-off handling | V: Check vertical velocity | N: Restart game | M: Cheat (get key) | P: Pause menu | ESC: Level menu</p>
         <p>C: Toggle camera mode (Third-person/Orbit) | R: Reset camera position | Ctrl+R: Reload config</p>
         <p>1-4: Camera presets (Default/Front/Top/Side) | Tab: Cycle presets</p>
         <p>L: Toggle JSON levels / Random generation | [ ]: Previous level | ] : Next level | Shift+R: Reload level data</p>
@@ -1676,6 +1675,11 @@
         <p>⚙️ Configuration: Adjust game settings like tile size, movement speed, and camera smoothness via config.json</p>
         <p id="camera-mode">Third-person camera: Follows player smoothly with gravity-aware orientation</p>
         <p id="camera-preset">Current preset: Default (Behind)</p>
+    </div>
+    
+    <!-- Controls Hint -->
+    <div id="controls-hint">
+        Press <kbd>,</kbd> for controls
     </div>
     
     <!-- Level Selection Menu -->

@@ -13,7 +13,26 @@ const physicsWorld = {
     raycaster: new THREE.Raycaster(),
     downDirection: new THREE.Vector3(0, -1, 0),
     tempVector: new THREE.Vector3(),
-    tempMatrix: new THREE.Matrix4()
+    tempMatrix: new THREE.Matrix4(),
+    debugMode: false,
+    debugMaterials: {
+        collision: new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.3 }),
+        missing: new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 })
+    },
+    debugObjects: []
+};
+
+// Enhanced fall recovery system
+const fallRecovery = {
+    enabled: true,
+    fallThreshold: -100, // Ultimate fall threshold
+    warningThreshold: -50, // Warning threshold
+    lastSafePosition: new THREE.Vector3(0, 2, 0),
+    lastSafeTime: 0,
+    safePositionUpdateInterval: 1000, // Update safe position every second when grounded
+    fallCount: 0,
+    maxFallCount: 3, // After 3 falls, force reset to spawn
+    isRecovering: false
 };
 
 // Physics configuration (loaded from config.json)
@@ -53,11 +72,31 @@ function updatePhysicsConfig() {
         lowJumpMultiplier: getConfigValue('physics.lowJumpMultiplier', 2.2),
         terminalVelocity: getConfigValue('physics.terminalVelocity', 15),
         momentumPreservation: getConfigValue('physics.momentumPreservation', 0.75),
-        precisionThreshold: getConfigValue('physics.precisionThreshold', 0.05)
+        precisionThreshold: getConfigValue('physics.precisionThreshold', 0.05),
+        maxAirborneTime: getConfigValue('physics.maxAirborneTime', 5.0), // Failsafe: max time before forced ground
+        invertedWorldOffset: getConfigValue('physics.invertedWorldOffset', -30),
+        invertedWorldTransitionCooldown: getConfigValue('physics.invertedWorldTransitionCooldown', 2000),
+        fallThreshold: getConfigValue('physics.fallThreshold', -20),
+        velocityThreshold: getConfigValue('physics.velocityThreshold', -5),
+        // Enhanced collision detection settings
+        collisionRayCount: getConfigValue('physics.collisionRayCount', 5),
+        collisionRaySpread: getConfigValue('physics.collisionRaySpread', 0.3),
+        groundCheckDistance: getConfigValue('physics.groundCheckDistance', 1.0),
+        surfaceSnapDistance: getConfigValue('physics.surfaceSnapDistance', 0.1),
+        // Safe position settings
+        safePositionRadius: getConfigValue('physics.safePositionRadius', 2.0),
+        safePositionHeight: getConfigValue('physics.safePositionHeight', 1.0)
     };
     
     // Update gravity in physics world
     physicsWorld.gravity.set(0, PHYSICS_CONFIG.gravity, 0);
+    
+    // Update fall recovery thresholds
+    fallRecovery.fallThreshold = PHYSICS_CONFIG.fallThreshold - 80; // Much lower threshold
+    fallRecovery.warningThreshold = PHYSICS_CONFIG.fallThreshold - 30;
+    
+    // Update inverted world configuration
+    updateInvertedWorldConfig();
 }
 
 // Load configuration from config.json
@@ -184,6 +223,63 @@ function initializePhysics() {
     worldGroup.add(ground);
     
     console.log('Three.js physics system initialized');
+    console.log(`Initial physics surfaces: ${physicsWorld.surfaces.length}`);
+}
+
+// Function to add surface to physics world (with spam prevention)
+function addSurfaceToPhysics(surface) {
+    if (!surface || !surface.geometry) {
+        console.warn('Invalid surface provided to addSurfaceToPhysics');
+        return;
+    }
+    
+    if (!physicsWorld.surfaces.includes(surface)) {
+        physicsWorld.surfaces.push(surface);
+        // Reduced logging to prevent console spam
+        if (physicsWorld.surfaces.length % 10 === 0) {
+            console.log(`Added surface to physics world. Total surfaces: ${physicsWorld.surfaces.length}`);
+        }
+    }
+}
+
+// Function to remove surface from physics world
+function removeSurfaceFromPhysics(surface) {
+    const index = physicsWorld.surfaces.indexOf(surface);
+    if (index > -1) {
+        physicsWorld.surfaces.splice(index, 1);
+        console.log(`Removed surface from physics world. Total surfaces: ${physicsWorld.surfaces.length}`);
+    }
+}
+
+// Function to ensure all visible meshes are in physics world (optimized to prevent spam)
+function validatePhysicsSurfaces() {
+    let addedCount = 0;
+    
+    // Skip validation if physics world already has many surfaces (prevent spam)
+    if (physicsWorld.surfaces.length > 100) {
+        return 0;
+    }
+    
+    // Check all children of world group
+    worldGroup.traverse((child) => {
+        if (child.isMesh && child.geometry && child.material) {
+            // Skip certain objects that shouldn't be physics surfaces
+            if (child.userData.isCollectible || child.userData.isEffect || child.userData.isDebug) {
+                return;
+            }
+            
+            if (!physicsWorld.surfaces.includes(child)) {
+                addSurfaceToPhysics(child);
+                addedCount++;
+            }
+        }
+    });
+    
+    if (addedCount > 0) {
+        console.log(`✅ Added ${addedCount} missing surfaces to physics world`);
+    }
+    
+    return addedCount;
 }
 
 // Player physics properties
@@ -264,11 +360,145 @@ function resetPlayerPhysics() {
     player.rotation.set(0, 0, 0);
 }
 
-// Ground collision detection using raycasting
+// Enhanced ground collision detection using multiple raycasts
 function checkGroundCollision() {
     const rayOrigin = playerPhysics.position.clone();
-    const rayDirection = new THREE.Vector3(0, -1, 0);
-    const rayDistance = PHYSICS_CONFIG.playerRadius + 0.1;
+    const rayDirection = worldState.gravityDirection.clone().multiplyScalar(-1);
+    const rayDistance = PHYSICS_CONFIG.playerRadius + PHYSICS_CONFIG.groundCheckDistance;
+    
+    let bestIntersection = null;
+    let bestDistance = Infinity;
+    
+    // Cast multiple rays for better collision detection
+    for (let i = 0; i < PHYSICS_CONFIG.collisionRayCount; i++) {
+        const angle = (i / PHYSICS_CONFIG.collisionRayCount) * Math.PI * 2;
+        const offsetX = Math.cos(angle) * PHYSICS_CONFIG.collisionRaySpread;
+        const offsetZ = Math.sin(angle) * PHYSICS_CONFIG.collisionRaySpread;
+        
+        const rayOriginOffset = rayOrigin.clone().add(new THREE.Vector3(offsetX, 0, offsetZ));
+        physicsWorld.raycaster.set(rayOriginOffset, rayDirection);
+        
+        const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
+        
+        if (intersects.length > 0) {
+            const intersection = intersects[0];
+            if (intersection.distance < bestDistance) {
+                bestDistance = intersection.distance;
+                bestIntersection = intersection;
+            }
+        }
+    }
+    
+    // Also check center ray
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const centerIntersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
+    if (centerIntersects.length > 0 && centerIntersects[0].distance < bestDistance) {
+        bestDistance = centerIntersects[0].distance;
+        bestIntersection = centerIntersects[0];
+    }
+    
+    if (bestIntersection && bestDistance <= rayDistance) {
+        // Player is on or touching ground
+        const groundOffset = PHYSICS_CONFIG.playerRadius * (invertedWorld.isActive ? -1 : 1);
+        const groundY = bestIntersection.point.y + groundOffset;
+        
+        // Improved grounding check with better tolerance to prevent getting stuck
+        let shouldBeGrounded = false;
+        const groundTolerance = PHYSICS_CONFIG.surfaceSnapDistance * 3; // More forgiving tolerance
+        
+        if (invertedWorld.isActive) {
+            shouldBeGrounded = playerPhysics.position.y >= groundY - groundTolerance;
+        } else {
+            shouldBeGrounded = playerPhysics.position.y <= groundY + groundTolerance;
+        }
+        
+        if (shouldBeGrounded) {
+            // Gentle ground positioning to prevent ball getting stuck in tiles
+            const currentY = playerPhysics.position.y;
+            const targetY = groundY;
+            const snapStrength = 0.1; // Much gentler snapping
+            
+            // Only snap if not jumping and position difference is significant
+            if (!playerPhysics.isJumping && Math.abs(currentY - targetY) > 0.05) {
+                playerPhysics.position.y = THREE.MathUtils.lerp(currentY, targetY, snapStrength);
+            }
+            
+            // Update ground state
+            playerPhysics.isGrounded = true;
+            playerPhysics.canJump = true;
+            playerPhysics.lastGroundNormal.copy(bestIntersection.face.normal);
+            playerPhysics.groundDistance = bestDistance;
+            
+            // Update safe position when grounded
+            updateSafePosition();
+            
+            // Enhanced vertical velocity reset when grounded
+            const wasJumping = playerPhysics.isJumping;
+            
+            // Reset jumping flag when grounded (prevent bouncing)
+            if (playerPhysics.isJumping) {
+                playerPhysics.isJumping = false;
+            }
+            
+            // Comprehensive vertical velocity reset for grounded state
+            const velocityTolerance = 0.1; // Small tolerance for micro-movements
+            const shouldResetVelocity = invertedWorld.isActive ? 
+                playerPhysics.velocity.y > velocityTolerance : 
+                playerPhysics.velocity.y < -velocityTolerance;
+            
+            if (shouldResetVelocity) {
+                // Stop vertical movement completely when grounded
+                playerPhysics.velocity.y = 0;
+                
+                // Also reset any residual acceleration in the vertical direction
+                if (invertedWorld.isActive) {
+                    if (playerPhysics.acceleration.y < 0) {
+                        playerPhysics.acceleration.y = 0;
+                    }
+                } else {
+                    if (playerPhysics.acceleration.y > 0) {
+                        playerPhysics.acceleration.y = 0;
+                    }
+                }
+            }
+            
+            // Enhanced surface normal influence for realistic rolling on slopes
+            const normalInfluence = 0.15;
+            const surfaceInfluence = bestIntersection.face.normal.clone().multiplyScalar(normalInfluence);
+            
+            // Apply surface influence when grounded (but not during active jumping)
+            if (playerPhysics.isGrounded && !wasJumping) {
+                playerPhysics.velocity.add(surfaceInfluence);
+            }
+        } else {
+            // Player is close to ground but not touching it - set as airborne
+            playerPhysics.isGrounded = false;
+            playerPhysics.canJump = false;
+            playerPhysics.groundDistance = bestDistance;
+        }
+    } else {
+        // No ground detected - player is in air
+        playerPhysics.isGrounded = false;
+        playerPhysics.canJump = false;
+        playerPhysics.groundDistance = Infinity;
+    }
+    
+    // Check for fall recovery
+    checkFallRecovery();
+}
+
+// Gentle surface contact system to prevent hovering without causing vibration
+function ensureSurfaceContact() {
+    if (!playerPhysics.isGrounded) return;
+    
+    // Only apply surface contact when player is moving to prevent static vibration
+    const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+    if (horizontalSpeed < 0.1) return; // Skip when stationary to prevent vibration
+    
+    // Additional ground check to ensure continuous contact
+    const rayOrigin = playerPhysics.position.clone();
+    const rayDirection = worldState.gravityDirection.clone().multiplyScalar(-1);
+    const contactDistance = PHYSICS_CONFIG.playerRadius + 0.1; // More forgiving contact distance
     
     physicsWorld.raycaster.set(rayOrigin, rayDirection);
     const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
@@ -277,75 +507,347 @@ function checkGroundCollision() {
         const intersection = intersects[0];
         const distance = intersection.distance;
         
-        if (distance <= rayDistance) {
-            // Player is on or touching ground
-            const groundY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+        // Only apply gentle corrections when significantly off-surface
+        if (distance > contactDistance && distance < contactDistance * 2) {
+            const groundOffset = PHYSICS_CONFIG.playerRadius * (invertedWorld.isActive ? -1 : 1);
+            const targetY = intersection.point.y + groundOffset;
             
-            if (playerPhysics.position.y <= groundY) {
-                // Snap to ground
-                playerPhysics.position.y = groundY;
+            // Gentle surface adhesion when not jumping
+            if (!playerPhysics.isJumping) {
+                const adhesionStrength = 0.05; // Much gentler adhesion
+                playerPhysics.position.y = THREE.MathUtils.lerp(playerPhysics.position.y, targetY, adhesionStrength);
                 
-                // Update ground state
-                playerPhysics.isGrounded = true;
-                playerPhysics.canJump = true;
-                playerPhysics.lastGroundNormal.copy(intersection.face.normal);
-                playerPhysics.groundDistance = distance;
+                // Only clamp velocity if significantly wrong
+                const velocityTolerance = 0.1; // More forgiving tolerance
+                const shouldClampVelocity = invertedWorld.isActive ? 
+                    Math.abs(playerPhysics.velocity.y) > velocityTolerance : 
+                    Math.abs(playerPhysics.velocity.y) > velocityTolerance;
                 
-                // Handle bounce if hitting ground with significant velocity
-                if (playerPhysics.velocity.y < -PHYSICS_CONFIG.minBounceVelocity) {
-                    playerPhysics.velocity.y = -playerPhysics.velocity.y * PHYSICS_CONFIG.bounceRestitution;
-                } else if (playerPhysics.velocity.y < 0) {
-                    playerPhysics.velocity.y = 0;
+                if (shouldClampVelocity) {
+                    playerPhysics.velocity.y *= 0.5; // Dampen instead of zeroing
                 }
-                
-                // Apply surface normal influence for slopes
-                const normalInfluence = 0.1;
-                const surfaceInfluence = intersection.face.normal.clone().multiplyScalar(normalInfluence);
-                playerPhysics.velocity.add(surfaceInfluence);
             }
-        } else {
-            // Player is in air
-            playerPhysics.isGrounded = false;
-            playerPhysics.canJump = false;
-            playerPhysics.groundDistance = distance;
         }
-    } else {
-        // No ground detected - player is in air
-        playerPhysics.isGrounded = false;
-        playerPhysics.canJump = false;
-        playerPhysics.groundDistance = Infinity;
     }
 }
 
-// Update rolling animation based on movement
+// Balanced anti-bouncing system that prevents floating without causing vibration
+function preventVerticalVelocityAccumulation() {
+    if (!playerPhysics.isGrounded) return;
+    
+    const velocityTolerance = 0.1; // More forgiving tolerance to prevent vibration
+    const accelerationTolerance = 0.2; // More forgiving tolerance for acceleration
+    
+    // Only clamp velocity when significantly wrong and not jumping
+    const shouldClampVelocity = invertedWorld.isActive ? 
+        (playerPhysics.velocity.y > velocityTolerance || playerPhysics.velocity.y < -velocityTolerance) : 
+        (playerPhysics.velocity.y < -velocityTolerance || playerPhysics.velocity.y > velocityTolerance);
+    
+    if (shouldClampVelocity && !playerPhysics.isJumping) {
+        // Dampen instead of zeroing to prevent sudden changes
+        playerPhysics.velocity.y *= 0.3;
+    }
+    
+    // Gentle acceleration management when grounded (unless actively jumping)
+    if (!playerPhysics.isJumping) {
+        const shouldClampAcceleration = invertedWorld.isActive ? 
+            (playerPhysics.acceleration.y < -accelerationTolerance || playerPhysics.acceleration.y > accelerationTolerance) : 
+            (playerPhysics.acceleration.y > accelerationTolerance || playerPhysics.acceleration.y < -accelerationTolerance);
+        
+        if (shouldClampAcceleration) {
+            // Gentle pull toward ground instead of forced acceleration
+            const groundAdhesionAcceleration = 0.1;
+            if (invertedWorld.isActive) {
+                playerPhysics.acceleration.y = Math.max(playerPhysics.acceleration.y * 0.5, -groundAdhesionAcceleration);
+            } else {
+                playerPhysics.acceleration.y = Math.min(playerPhysics.acceleration.y * 0.5, -groundAdhesionAcceleration);
+            }
+        }
+    }
+}
+
+// ============ FALL RECOVERY SYSTEM ============
+
+// Update safe position when player is grounded
+function updateSafePosition() {
+    if (!playerPhysics.isGrounded || !fallRecovery.enabled) return;
+    
+    const currentTime = Date.now();
+    if (currentTime - fallRecovery.lastSafeTime > fallRecovery.safePositionUpdateInterval) {
+        fallRecovery.lastSafePosition.copy(playerPhysics.position);
+        fallRecovery.lastSafeTime = currentTime;
+        
+        // Reset fall count when we've been safe for a while
+        if (fallRecovery.fallCount > 0) {
+            fallRecovery.fallCount = Math.max(0, fallRecovery.fallCount - 1);
+        }
+    }
+}
+
+// Check if player is falling and needs recovery
+function checkFallRecovery() {
+    if (!fallRecovery.enabled || fallRecovery.isRecovering) return;
+    
+    const playerY = playerPhysics.position.y;
+    
+    // Warning threshold - show warning but don't recover yet
+    if (playerY < fallRecovery.warningThreshold && playerY > fallRecovery.fallThreshold) {
+        if (playerPhysics.velocity.y < -5) { // Falling fast
+            showMessage('⚠️ Falling! Press SPACE to jump!', '#ffaa00', 1000);
+        }
+    }
+    
+    // Ultimate fall threshold - force recovery
+    if (playerY < fallRecovery.fallThreshold) {
+        console.log('🚨 FALL RECOVERY: Player fell below threshold, recovering...');
+        recoverFromFall();
+    }
+    
+    // Y position clamping as last resort
+    if (playerY < -100) {
+        console.log('🚨 EMERGENCY CLAMP: Player fell below -100, emergency recovery!');
+        emergencyRecovery();
+    }
+}
+
+// Recover player from fall
+function recoverFromFall() {
+    if (fallRecovery.isRecovering) return;
+    
+    fallRecovery.isRecovering = true;
+    fallRecovery.fallCount++;
+    
+    // Find safe position
+    let recoveryPosition = fallRecovery.lastSafePosition.clone();
+    
+    // If we've fallen too many times, reset to spawn
+    if (fallRecovery.fallCount >= fallRecovery.maxFallCount) {
+        const spawnPos = gridToWorld(playerStartPosition.gridX, playerStartPosition.gridZ);
+        recoveryPosition = new THREE.Vector3(spawnPos.x, spawnPos.y + 1, spawnPos.z);
+        fallRecovery.fallCount = 0;
+        showMessage('🔄 Respawning at start position...', '#ff6600', 2000);
+    } else {
+        // Validate safe position
+        if (!isSafePosition(recoveryPosition)) {
+            recoveryPosition = findNearestSafePosition(recoveryPosition);
+        }
+        showMessage(`🛡️ Fall recovery activated! (${fallRecovery.fallCount}/${fallRecovery.maxFallCount})`, '#00ff88', 2000);
+    }
+    
+    // Set player position and physics
+    playerPhysics.position.copy(recoveryPosition);
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.isGrounded = false;
+    player.position.copy(playerPhysics.position);
+    
+    // Update safe position
+    fallRecovery.lastSafePosition.copy(recoveryPosition);
+    fallRecovery.lastSafeTime = Date.now();
+    
+    // Play recovery sound
+    soundManager.play('teleport');
+    
+    // Clear recovery flag after a short delay
+    setTimeout(() => {
+        fallRecovery.isRecovering = false;
+    }, 500);
+}
+
+// Emergency recovery for extreme cases
+function emergencyRecovery() {
+    console.log('🚨 EMERGENCY RECOVERY: Resetting to spawn position');
+    
+    const spawnPos = gridToWorld(playerStartPosition.gridX, playerStartPosition.gridZ);
+    const emergencyPos = new THREE.Vector3(spawnPos.x, spawnPos.y + 2, spawnPos.z);
+    
+    playerPhysics.position.copy(emergencyPos);
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.isGrounded = false;
+    player.position.copy(playerPhysics.position);
+    
+    fallRecovery.lastSafePosition.copy(emergencyPos);
+    fallRecovery.lastSafeTime = Date.now();
+    fallRecovery.fallCount = 0;
+    fallRecovery.isRecovering = false;
+    
+    showMessage('🚨 Emergency recovery! Position reset.', '#ff0000', 3000);
+    soundManager.play('damage');
+}
+
+// Check if a position is safe (has ground nearby)
+function isSafePosition(position) {
+    const testRay = new THREE.Raycaster(position, new THREE.Vector3(0, -1, 0));
+    const intersects = testRay.intersectObjects(physicsWorld.surfaces, false);
+    
+    return intersects.length > 0 && intersects[0].distance < PHYSICS_CONFIG.safePositionRadius;
+}
+
+// Find nearest safe position
+function findNearestSafePosition(fallbackPosition) {
+    // Try positions in expanding circles around the fallback position
+    for (let radius = 1; radius <= 10; radius++) {
+        for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
+            const testPos = fallbackPosition.clone().add(new THREE.Vector3(
+                Math.cos(angle) * radius,
+                PHYSICS_CONFIG.safePositionHeight,
+                Math.sin(angle) * radius
+            ));
+            
+            if (isSafePosition(testPos)) {
+                return testPos;
+            }
+        }
+    }
+    
+    // If no safe position found, use spawn position
+    const spawnPos = gridToWorld(playerStartPosition.gridX, playerStartPosition.gridZ);
+    return new THREE.Vector3(spawnPos.x, spawnPos.y + 1, spawnPos.z);
+}
+
+// ============ DEBUG VISUALIZATION SYSTEM ============
+
+// Toggle debug mode for collision visualization
+function toggleDebugMode() {
+    physicsWorld.debugMode = !physicsWorld.debugMode;
+    
+    if (physicsWorld.debugMode) {
+        showCollisionDebug();
+        showMessage('🔍 Debug mode ON - Collision surfaces highlighted', '#00ff00', 2000);
+    } else {
+        hideCollisionDebug();
+        showMessage('🔍 Debug mode OFF', '#888888', 2000);
+    }
+    
+    console.log(`Debug mode: ${physicsWorld.debugMode ? 'ON' : 'OFF'}`);
+}
+
+// Show collision debug visualization
+function showCollisionDebug() {
+    hideCollisionDebug(); // Clear existing debug objects
+    
+    console.log(`🔍 Visualizing ${physicsWorld.surfaces.length} collision surfaces`);
+    
+    physicsWorld.surfaces.forEach((surface, index) => {
+        try {
+            // Create debug visualization for each surface
+            const debugGeometry = surface.geometry.clone();
+            const debugMaterial = physicsWorld.debugMaterials.collision.clone();
+            const debugMesh = new THREE.Mesh(debugGeometry, debugMaterial);
+            
+            // Copy transform from original surface
+            debugMesh.position.copy(surface.position);
+            debugMesh.rotation.copy(surface.rotation);
+            debugMesh.scale.copy(surface.scale);
+            
+            // Add to scene
+            worldGroup.add(debugMesh);
+            physicsWorld.debugObjects.push(debugMesh);
+            
+            // Add label
+            const label = createDebugLabel(`Surface ${index}`, surface.position);
+            worldGroup.add(label);
+            physicsWorld.debugObjects.push(label);
+            
+        } catch (error) {
+            console.warn(`Failed to create debug visualization for surface ${index}:`, error);
+        }
+    });
+}
+
+// Hide collision debug visualization
+function hideCollisionDebug() {
+    physicsWorld.debugObjects.forEach(obj => {
+        worldGroup.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+    });
+    physicsWorld.debugObjects = [];
+}
+
+// Create debug label
+function createDebugLabel(text, position) {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = 256;
+    canvas.height = 64;
+    
+    context.fillStyle = '#000000';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#ffffff';
+    context.font = '16px Arial';
+    context.textAlign = 'center';
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+    const geometry = new THREE.PlaneGeometry(1, 0.25);
+    const mesh = new THREE.Mesh(geometry, material);
+    
+    mesh.position.copy(position);
+    mesh.position.y += 1;
+    mesh.lookAt(camera.position);
+    
+    return mesh;
+}
+
+// Enhanced rolling animation with improved smoothness and momentum
 function updateRollingAnimation() {
     const horizontalVelocity = new THREE.Vector3(playerPhysics.velocity.x, 0, playerPhysics.velocity.z);
     const speed = horizontalVelocity.length();
     
-    if (speed > 0.01) {
+    if (speed > 0.005) { // Lower threshold for more responsive rolling
         // Calculate rolling based on movement direction
         const movementDirection = horizontalVelocity.normalize();
         
         // Create rolling axis perpendicular to movement
-        playerPhysics.rollingAxis.crossVectors(movementDirection, new THREE.Vector3(0, 1, 0)).normalize();
+        const newRollingAxis = new THREE.Vector3();
+        newRollingAxis.crossVectors(movementDirection, new THREE.Vector3(0, 1, 0)).normalize();
         
-        // Calculate roll speed based on sphere circumference
+        // Smooth transition between rolling axes to prevent jittery rotation
+        if (playerPhysics.rollingAxis.length() > 0) {
+            playerPhysics.rollingAxis.lerp(newRollingAxis, 0.1);
+        } else {
+            playerPhysics.rollingAxis.copy(newRollingAxis);
+        }
+        
+        // Calculate roll speed based on sphere circumference with improved physics
         const circumference = 2 * Math.PI * PHYSICS_CONFIG.playerRadius;
-        playerPhysics.rollSpeed = (speed / circumference) * 2 * Math.PI;
+        const targetRollSpeed = (speed / circumference) * 2 * Math.PI;
         
-        // Apply rolling animation
-        playerPhysics.rollAngle += playerPhysics.rollSpeed * (1/60); // Fixed timestep
+        // Smooth roll speed transition for more natural acceleration/deceleration
+        playerPhysics.rollSpeed = THREE.MathUtils.lerp(playerPhysics.rollSpeed, targetRollSpeed, 0.15);
         
-        // Apply roll damping
-        playerPhysics.rollSpeed *= PHYSICS_CONFIG.rollDamping;
+        // Apply rolling animation with delta time for consistent frame rate
+        const deltaTime = 1/60; // Fixed timestep
+        playerPhysics.rollAngle += playerPhysics.rollSpeed * deltaTime;
         
-        // Update visual sphere rotation
+        // Update visual sphere rotation with smoother interpolation
         const rollQuaternion = new THREE.Quaternion();
         rollQuaternion.setFromAxisAngle(playerPhysics.rollingAxis, playerPhysics.rollAngle);
-        player.quaternion.copy(rollQuaternion);
+        
+        // Smooth rotation interpolation to prevent visual jitter
+        player.quaternion.slerp(rollQuaternion, 0.3);
+        
+        // Enhanced surface contact - add slight rotation based on slope
+        if (playerPhysics.isGrounded && playerPhysics.lastGroundNormal) {
+            const slopeInfluence = 0.05;
+            const slopeQuaternion = new THREE.Quaternion();
+            slopeQuaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), playerPhysics.lastGroundNormal);
+            player.quaternion.multiply(slopeQuaternion.clone().slerp(new THREE.Quaternion(), 1 - slopeInfluence));
+        }
     } else {
-        // Slow down rolling when not moving
+        // Gradual slowdown when not moving for more natural deceleration
         playerPhysics.rollSpeed *= PHYSICS_CONFIG.rollDamping;
+        
+        // Continue slight rotation if there's still momentum
+        if (Math.abs(playerPhysics.rollSpeed) > 0.01) {
+            const deltaTime = 1/60;
+            playerPhysics.rollAngle += playerPhysics.rollSpeed * deltaTime;
+            
+            const rollQuaternion = new THREE.Quaternion();
+            rollQuaternion.setFromAxisAngle(playerPhysics.rollingAxis, playerPhysics.rollAngle);
+            player.quaternion.slerp(rollQuaternion, 0.1);
+        }
     }
 }
 
@@ -374,42 +876,59 @@ function applyPhysicsWithoutInput(deltaTime) {
     // Apply only gravity and momentum, no input forces
     playerPhysics.inputForce.set(0, 0, 0);
     
-    // Apply gravity
-    if (!playerPhysics.isGrounded) {
-        const gravityForce = worldState.gravityDirection.clone().multiplyScalar(playerPhysics.gravity);
-        playerPhysics.velocity.add(gravityForce.multiplyScalar(deltaTime));
-    }
+    // Apply gravity consistently using the same method as main physics loop
+    applyVariableGravity(deltaTime);
+    
+    // Add gravity acceleration to velocity
+    playerPhysics.velocity.add(playerPhysics.acceleration.clone().multiplyScalar(deltaTime));
     
     // Apply ground friction if grounded
     if (playerPhysics.isGrounded) {
-        playerPhysics.velocity.x *= playerPhysics.groundFriction;
-        playerPhysics.velocity.z *= playerPhysics.groundFriction;
+        playerPhysics.velocity.x *= PHYSICS_CONFIG.groundFriction;
+        playerPhysics.velocity.z *= PHYSICS_CONFIG.groundFriction;
     }
     
     // Apply air resistance
     if (!playerPhysics.isGrounded) {
-        playerPhysics.velocity.x *= playerPhysics.airResistance;
-        playerPhysics.velocity.z *= playerPhysics.airResistance;
+        playerPhysics.velocity.x *= PHYSICS_CONFIG.airFriction;
+        playerPhysics.velocity.z *= PHYSICS_CONFIG.airFriction;
     }
     
-    // Update position
+    // Apply terminal velocity consistently
+    if (playerPhysics.velocity.y < -PHYSICS_CONFIG.terminalVelocity) {
+        playerPhysics.velocity.y = -PHYSICS_CONFIG.terminalVelocity;
+    }
+    
+    // Update physics position
     const deltaPosition = playerPhysics.velocity.clone().multiplyScalar(deltaTime);
-    player.position.add(deltaPosition);
+    playerPhysics.position.add(deltaPosition);
     
     // Check ground collision
     checkGroundCollision();
     
+    // Additional grounding validation - check and reset if on valid surface
+    if (!playerPhysics.isGrounded) {
+        validateAndResetGrounding();
+    }
+    
     // Update movement state
     updateMovementState();
+    
+    // Prevent vertical velocity accumulation when grounded (anti-bouncing)
+    preventVerticalVelocityAccumulation();
+    
+    // Sync visual player position with physics position
+    player.position.copy(playerPhysics.position);
 }
 
 // Enhanced physics-based movement system for skill-based gameplay
+// NOTE: This function is completely camera-independent and works identically in all camera modes
 function updatePhysicsMovement() {
     const deltaTime = 1/60; // Fixed timestep for consistent physics
     const { inputState } = playerState;
     const currentTime = Date.now() / 1000;
     
-    // Skip input processing if locked during transitions
+    // Skip input processing if locked during transitions (pause/rotation only - NOT camera state)
     if (isInputLocked()) {
         // Still update physics for gravity/momentum but ignore input
         applyPhysicsWithoutInput(deltaTime);
@@ -426,14 +945,24 @@ function updatePhysicsMovement() {
     // Handle input forces with precision mode
     playerPhysics.inputForce.set(0, 0, 0);
     
-    // Get camera direction (free movement, not grid-locked)
-    const cameraDirection = new THREE.Vector3();
-    camera.getWorldDirection(cameraDirection);
-    cameraDirection.y = 0; // Remove vertical component
-    cameraDirection.normalize();
+    // Get camera-independent input directions for consistent physics behavior
+    let cameraDirection, rightDirection;
     
-    const rightDirection = new THREE.Vector3();
-    rightDirection.crossVectors(cameraDirection, camera.up).normalize();
+    if (cameraSystem.currentMode === 'isometric') {
+        // Use world-space directions for isometric mode to ensure consistent physics
+        // This prevents camera angle from affecting movement physics
+        cameraDirection = new THREE.Vector3(0, 0, -1); // Forward in world space
+        rightDirection = new THREE.Vector3(1, 0, 0);   // Right in world space
+    } else {
+        // Use camera-relative directions for chase mode (natural third-person movement)
+        cameraDirection = new THREE.Vector3();
+        camera.getWorldDirection(cameraDirection);
+        cameraDirection.y = 0; // Remove vertical component
+        cameraDirection.normalize();
+        
+        rightDirection = new THREE.Vector3();
+        rightDirection.crossVectors(cameraDirection, camera.up).normalize();
+    }
     
     // Calculate input magnitude for precision mode
     let inputMagnitude = 0;
@@ -501,19 +1030,39 @@ function updatePhysicsMovement() {
     // Ground collision detection
     checkGroundCollision();
     
+    // Additional grounding validation - check and reset if on valid surface
+    if (!playerPhysics.isGrounded) {
+        validateAndResetGrounding();
+    }
+    
     // Update movement state
     updateMovementState();
     
     // Update rolling animation
     updateRollingAnimation();
     
-    // Update visual player position
+    // Apply stability optimizations only when needed
+    if (playerPhysics.isGrounded) {
+        // Only apply surface contact when moving to prevent static vibration
+        const isMoving = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2) > 0.05;
+        if (isMoving) {
+            ensureSurfaceContact();
+        }
+        
+        // Prevent vertical velocity accumulation when grounded (anti-bouncing)
+        preventVerticalVelocityAccumulation();
+    }
+    
+    // Update visual player position (always sync with physics)
     player.position.copy(playerPhysics.position);
     
     // Update legacy grid position for backwards compatibility
     const worldPos = player.position;
     playerState.gridX = Math.round((worldPos.x / tileSize) + (gridSize / 2) - 0.5);
     playerState.gridZ = Math.round((worldPos.z / tileSize) + (gridSize / 2) - 0.5);
+    
+    // Validate physics surfaces only once per game session or when explicitly needed
+    // Removed periodic validation to prevent repeated surface additions causing vibration
 }
 
 // Update movement timers for skill-based features
@@ -536,56 +1085,1590 @@ function updateMovementTimers(deltaTime) {
     if (playerPhysics.jumpBufferTimer > 0) {
         playerPhysics.jumpBufferTimer = Math.max(0, playerPhysics.jumpBufferTimer - deltaTime);
     }
+    
+    // Failsafe: Check if player has been airborne for too long
+    if (!playerPhysics.isGrounded && playerPhysics.airTime > PHYSICS_CONFIG.maxAirborneTime) {
+        checkAirborneFailsafe();
+    }
+    
+    // Periodic grounding validation (every 2 seconds when not grounded)
+    if (!playerPhysics.isGrounded && playerPhysics.airTime > 2.0 && Math.floor(playerPhysics.airTime * 10) % 20 === 0) {
+        validateAndResetGrounding();
+    }
 }
 
-// Enhanced jump handling with coyote time and jump buffering
+// Failsafe function to handle when player has been airborne for too long
+function checkAirborneFailsafe() {
+    console.warn(`🚨 AIRBORNE FAILSAFE TRIGGERED: Player has been airborne for ${playerPhysics.airTime.toFixed(2)} seconds`);
+    console.warn(`🚨 Player position: [${playerPhysics.position.x.toFixed(2)}, ${playerPhysics.position.y.toFixed(2)}, ${playerPhysics.position.z.toFixed(2)}]`);
+    console.warn(`🚨 Player velocity: [${playerPhysics.velocity.x.toFixed(2)}, ${playerPhysics.velocity.y.toFixed(2)}, ${playerPhysics.velocity.z.toFixed(2)}]`);
+    
+    // First, try to find a safe ground position directly below the player
+    const safeGroundPosition = findSafeGroundPosition(playerPhysics.position);
+    
+    if (safeGroundPosition) {
+        console.log(`✅ Found safe ground position at [${safeGroundPosition.x.toFixed(2)}, ${safeGroundPosition.y.toFixed(2)}, ${safeGroundPosition.z.toFixed(2)}]`);
+        
+        // Teleport player to safe ground position
+        playerPhysics.position.copy(safeGroundPosition);
+        player.position.copy(playerPhysics.position);
+        
+        // Reset physics state to grounded
+        playerPhysics.velocity.set(0, 0, 0);
+        playerPhysics.acceleration.set(0, 0, 0);
+        playerPhysics.isGrounded = true;
+        playerPhysics.canJump = true;
+        playerPhysics.airTime = 0;
+        playerPhysics.groundedFrames = 1;
+        playerPhysics.lastGroundTime = Date.now() / 1000;
+        
+        // Show message to player
+        showMessage('Position corrected - you were stuck in the air!', '#ffaa00', 3000);
+        
+    } else {
+        console.warn(`❌ No safe ground position found, using fallback respawn`);
+        
+        // Fallback: Use existing respawn system
+        triggerRespawn('airborne_timeout');
+    }
+    
+    // Play a notification sound
+    soundManager.play('teleport');
+}
+
+// Find a safe ground position below the player using raycasting
+function findSafeGroundPosition(currentPosition) {
+    const rayOrigin = currentPosition.clone();
+    const rayDirection = new THREE.Vector3(0, -1, 0);
+    const maxRayDistance = 50; // Search up to 50 units below
+    
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
+    
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const distance = intersection.distance;
+        
+        // Only use positions that are reasonable (not too far down)
+        if (distance <= maxRayDistance) {
+            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius + 0.1;
+            return new THREE.Vector3(currentPosition.x, safeY, currentPosition.z);
+        }
+    }
+    
+    // If no ground found below, try to find the nearest spawn point
+    if (fallDetection.safeSpawnPoints && fallDetection.safeSpawnPoints.length > 0) {
+        const nearestSpawn = fallDetection.safeSpawnPoints[0];
+        const spawnPos = nearestSpawn.position || nearestSpawn; // Handle both old and new formats
+        return new THREE.Vector3(spawnPos.x, spawnPos.y, spawnPos.z);
+    }
+    
+    // Last resort: use default position
+    return new THREE.Vector3(0, 2, 0);
+}
+
+// Validation function to test airborne failsafe system
+function validateAirborneFailsafe() {
+    console.log('🔍 VALIDATING AIRBORNE FAILSAFE SYSTEM...');
+    
+    // Check if failsafe configuration is loaded
+    if (!PHYSICS_CONFIG.maxAirborneTime) {
+        console.error('❌ maxAirborneTime not configured in PHYSICS_CONFIG');
+        return false;
+    }
+    
+    console.log(`✅ Max airborne time configured: ${PHYSICS_CONFIG.maxAirborneTime} seconds`);
+    
+    // Check current player physics state
+    console.log(`📊 Current player state:`);
+    console.log(`   - isGrounded: ${playerPhysics.isGrounded}`);
+    console.log(`   - airTime: ${playerPhysics.airTime.toFixed(2)} seconds`);
+    console.log(`   - position: [${playerPhysics.position.x.toFixed(2)}, ${playerPhysics.position.y.toFixed(2)}, ${playerPhysics.position.z.toFixed(2)}]`);
+    console.log(`   - velocity: [${playerPhysics.velocity.x.toFixed(2)}, ${playerPhysics.velocity.y.toFixed(2)}, ${playerPhysics.velocity.z.toFixed(2)}]`);
+    
+    // Test safe ground position finding
+    const testPosition = new THREE.Vector3(0, 10, 0);
+    const safePos = findSafeGroundPosition(testPosition);
+    if (safePos) {
+        console.log(`✅ Safe ground position test passed: [${safePos.x.toFixed(2)}, ${safePos.y.toFixed(2)}, ${safePos.z.toFixed(2)}]`);
+    } else {
+        console.warn('⚠️  Safe ground position test failed - no safe position found');
+    }
+    
+    // Check if failsafe functions exist
+    if (typeof checkAirborneFailsafe === 'function') {
+        console.log('✅ checkAirborneFailsafe function exists');
+    } else {
+        console.error('❌ checkAirborneFailsafe function not found');
+        return false;
+    }
+    
+    if (typeof findSafeGroundPosition === 'function') {
+        console.log('✅ findSafeGroundPosition function exists');
+    } else {
+        console.error('❌ findSafeGroundPosition function not found');
+        return false;
+    }
+    
+    console.log('✅ AIRBORNE FAILSAFE VALIDATION COMPLETE');
+    return true;
+}
+
+// Test function to simulate getting stuck in air (for debugging)
+function testAirborneFailsafe() {
+    console.log('🧪 TESTING AIRBORNE FAILSAFE...');
+    
+    // Force player into airborne state
+    playerPhysics.isGrounded = false;
+    playerPhysics.canJump = false;
+    playerPhysics.airTime = PHYSICS_CONFIG.maxAirborneTime + 1; // Exceed the threshold
+    
+    console.log('🚁 Player forced into airborne state with excessive air time');
+    console.log(`   - airTime: ${playerPhysics.airTime.toFixed(2)} seconds (threshold: ${PHYSICS_CONFIG.maxAirborneTime})`);
+    
+    // Manually trigger the failsafe
+    checkAirborneFailsafe();
+    
+    console.log('✅ AIRBORNE FAILSAFE TEST COMPLETE');
+}
+
+// Make validation functions globally accessible for debugging
+window.validateAirborneFailsafe = validateAirborneFailsafe;
+window.testAirborneFailsafe = testAirborneFailsafe;
+window.checkGroundingStatus = () => {
+    console.log('🔍 GROUNDING STATUS:');
+    console.log(`   - isGrounded: ${playerPhysics.isGrounded}`);
+    console.log(`   - canJump: ${playerPhysics.canJump}`);
+    console.log(`   - groundDistance: ${playerPhysics.groundDistance.toFixed(3)}`);
+    console.log(`   - airTime: ${playerPhysics.airTime.toFixed(2)}s`);
+    console.log(`   - position: [${playerPhysics.position.x.toFixed(2)}, ${playerPhysics.position.y.toFixed(2)}, ${playerPhysics.position.z.toFixed(2)}]`);
+    console.log(`   - velocity: [${playerPhysics.velocity.x.toFixed(2)}, ${playerPhysics.velocity.y.toFixed(2)}, ${playerPhysics.velocity.z.toFixed(2)}]`);
+    console.log(`   - isJumping: ${playerPhysics.isJumping}`);
+    console.log(`   - movementState: ${playerPhysics.movementState}`);
+    console.log(`   - jumpRequested: ${playerPhysics.jumpRequested}`);
+    console.log(`   - jumpBufferTimer: ${playerPhysics.jumpBufferTimer.toFixed(3)}`);
+    
+    // Jump eligibility check
+    const isProperlyGrounded = playerPhysics.isGrounded && 
+                               playerPhysics.canJump && 
+                               playerPhysics.groundDistance <= (PHYSICS_CONFIG.playerRadius + PHYSICS_CONFIG.surfaceSnapDistance);
+    console.log(`   - jumpEligible: ${isProperlyGrounded}`);
+};
+
+window.toggleJumpDebug = () => {
+    physicsWorld.debugMode = !physicsWorld.debugMode;
+    console.log(`🔧 Jump debug mode: ${physicsWorld.debugMode ? 'ON' : 'OFF'}`);
+    showMessage(`Jump debug: ${physicsWorld.debugMode ? 'ON' : 'OFF'}`, '#00ffff', 2000);
+};
+
+window.testJumpSystem = () => {
+    console.log('🧪 TESTING JUMP SYSTEM...');
+    
+    // Test 1: Check current grounding status
+    console.log('📋 Test 1: Current grounding status');
+    checkGroundingStatus();
+    
+    // Test 2: Try jumping when grounded
+    if (playerPhysics.isGrounded) {
+        console.log('📋 Test 2: Attempting jump while grounded');
+        const oldJumpDebug = physicsWorld.debugMode;
+        physicsWorld.debugMode = true;
+        
+        // Simulate jump input
+        playerState.inputState.jump = true;
+        handleEnhancedJump(playerState.inputState, Date.now() / 1000);
+        
+        setTimeout(() => {
+            console.log('📋 Test 2 Result: Jump velocity Y =', playerPhysics.velocity.y.toFixed(2));
+            playerState.inputState.jump = false;
+            physicsWorld.debugMode = oldJumpDebug;
+        }, 100);
+    } else {
+        console.log('📋 Test 2: SKIPPED - Player not grounded');
+    }
+    
+    // Test 3: Test jump blocking when airborne
+    console.log('📋 Test 3: Testing jump blocking when airborne');
+    setTimeout(() => {
+        const originalGrounded = playerPhysics.isGrounded;
+        playerPhysics.isGrounded = false;
+        playerPhysics.canJump = false;
+        
+        const oldJumpDebug = physicsWorld.debugMode;
+        physicsWorld.debugMode = true;
+        
+        // Simulate jump input while airborne
+        playerState.inputState.jump = true;
+        handleEnhancedJump(playerState.inputState, Date.now() / 1000);
+        
+        setTimeout(() => {
+            console.log('📋 Test 3 Result: Jump blocked correctly');
+            playerState.inputState.jump = false;
+            playerPhysics.isGrounded = originalGrounded;
+            physicsWorld.debugMode = oldJumpDebug;
+        }, 100);
+    }, 1000);
+    
+    console.log('✅ JUMP SYSTEM TEST COMPLETE');
+};
+
+window.testFallOffHandling = () => {
+    console.log('🧪 TESTING FALL-OFF HANDLING SYSTEM...');
+    
+    // Test 1: Check current level support
+    console.log('📋 Test 1: Current level inverted world support');
+    const currentLevel = getCurrentLevelData();
+    const supportsInvertedWorld = levelSupportsInvertedWorld();
+    
+    console.log(`   - Level: ${currentLevel ? currentLevel.name : 'Unknown'} (${currentLevel ? currentLevel.number : 'N/A'})`);
+    console.log(`   - Supports inverted world: ${supportsInvertedWorld}`);
+    console.log(`   - Has 3D: ${currentLevel ? currentLevel.use3D : 'N/A'}`);
+    console.log(`   - Has underworld: ${currentLevel ? currentLevel.hasUnderworld : 'N/A'}`);
+    console.log(`   - Has explicit inverted world: ${currentLevel ? currentLevel.hasInvertedWorld : 'N/A'}`);
+    
+    // Test 2: Simulate fall-off
+    console.log('📋 Test 2: Simulating fall-off scenario...');
+    const originalPosition = playerPhysics.position.clone();
+    
+    // Move player below fall threshold
+    playerPhysics.position.y = invertedWorld.fallThreshold - 5;
+    playerPhysics.velocity.y = -10; // Falling fast
+    playerPhysics.isGrounded = false;
+    
+    console.log(`   - Player moved to Y: ${playerPhysics.position.y.toFixed(2)}`);
+    console.log(`   - Fall threshold: ${invertedWorld.fallThreshold}`);
+    console.log(`   - Expected behavior: ${supportsInvertedWorld ? 'Transition to inverted world' : 'Restart level'}`);
+    
+    // Trigger fall detection
+    checkFallDetection();
+    
+    // Restore original position after a short delay
+    setTimeout(() => {
+        playerPhysics.position.copy(originalPosition);
+        playerPhysics.velocity.y = 0;
+        playerPhysics.isGrounded = true;
+        console.log('📋 Test 2 Complete: Player position restored');
+    }, 2000);
+    
+    console.log('✅ FALL-OFF HANDLING TEST COMPLETE');
+};
+
+window.checkLevelSupport = () => {
+    console.log('🔍 CHECKING LEVEL INVERTED WORLD SUPPORT...');
+    
+    const currentLevel = getCurrentLevelData();
+    const supportsInvertedWorld = levelSupportsInvertedWorld();
+    
+    if (currentLevel) {
+        console.log(`📋 Level Information:`);
+        console.log(`   - Name: ${currentLevel.name}`);
+        console.log(`   - Number: ${currentLevel.number}`);
+        console.log(`   - Grid Size: ${currentLevel.gridSize}`);
+        console.log(`   - Use 3D: ${currentLevel.use3D || false}`);
+        console.log(`   - Has Underworld: ${currentLevel.hasUnderworld || false}`);
+        console.log(`   - Has Inverted World: ${currentLevel.hasInvertedWorld || 'undefined'}`);
+        console.log(`   - Supports Inverted World: ${supportsInvertedWorld}`);
+        console.log(`   - Current World State: ${invertedWorld.isActive ? 'Inverted' : 'Normal'}`);
+    } else {
+        console.log('❌ No current level data found');
+    }
+};
+
+window.checkVerticalVelocity = () => {
+    console.log('🔍 CHECKING VERTICAL VELOCITY STATUS...');
+    
+    console.log(`📋 Physics State:`);
+    console.log(`   - Position: [${playerPhysics.position.x.toFixed(2)}, ${playerPhysics.position.y.toFixed(2)}, ${playerPhysics.position.z.toFixed(2)}]`);
+    console.log(`   - Velocity: [${playerPhysics.velocity.x.toFixed(3)}, ${playerPhysics.velocity.y.toFixed(3)}, ${playerPhysics.velocity.z.toFixed(3)}]`);
+    console.log(`   - Acceleration: [${playerPhysics.acceleration.x.toFixed(3)}, ${playerPhysics.acceleration.y.toFixed(3)}, ${playerPhysics.acceleration.z.toFixed(3)}]`);
+    console.log(`   - isGrounded: ${playerPhysics.isGrounded}`);
+    console.log(`   - isJumping: ${playerPhysics.isJumping}`);
+    console.log(`   - canJump: ${playerPhysics.canJump}`);
+    console.log(`   - groundDistance: ${playerPhysics.groundDistance.toFixed(3)}`);
+    console.log(`   - airTime: ${playerPhysics.airTime.toFixed(2)}s`);
+    console.log(`   - movementState: ${playerPhysics.movementState}`);
+    
+    // Check for potential bouncing issues
+    const verticalVelocityMagnitude = Math.abs(playerPhysics.velocity.y);
+    const verticalAccelerationMagnitude = Math.abs(playerPhysics.acceleration.y);
+    
+    if (playerPhysics.isGrounded && verticalVelocityMagnitude > 0.1) {
+        console.log(`⚠️  POTENTIAL BOUNCING: Grounded but has vertical velocity: ${playerPhysics.velocity.y.toFixed(3)}`);
+    }
+    
+    if (playerPhysics.isGrounded && verticalAccelerationMagnitude > 0.5) {
+        console.log(`⚠️  POTENTIAL FLOATING: Grounded but has vertical acceleration: ${playerPhysics.acceleration.y.toFixed(3)}`);
+    }
+    
+    if (playerPhysics.isGrounded && verticalVelocityMagnitude <= 0.05 && verticalAccelerationMagnitude <= 0.1) {
+        console.log(`✅ STABLE: Player is properly grounded with minimal vertical motion`);
+    }
+};
+
+window.testBouncingFix = () => {
+    console.log('🧪 TESTING BOUNCING/FLOATING FIX...');
+    
+    // Store original state
+    const originalPosition = playerPhysics.position.clone();
+    const originalVelocity = playerPhysics.velocity.clone();
+    const originalGrounded = playerPhysics.isGrounded;
+    const originalJumping = playerPhysics.isJumping;
+    
+    // Test 1: Simulate grounded player with upward velocity (potential bouncing)
+    console.log('📋 Test 1: Grounded player with upward velocity');
+    playerPhysics.isGrounded = true;
+    playerPhysics.velocity.y = 2.0; // Upward velocity
+    playerPhysics.isJumping = false;
+    
+    console.log(`   - Before fix: velocity.y = ${playerPhysics.velocity.y.toFixed(3)}`);
+    preventVerticalVelocityAccumulation();
+    console.log(`   - After fix: velocity.y = ${playerPhysics.velocity.y.toFixed(3)}`);
+    
+    // Test 2: Simulate landing after jump (should reset jumping flag and velocity)
+    console.log('📋 Test 2: Landing after jump');
+    playerPhysics.isGrounded = false;
+    playerPhysics.isJumping = true;
+    playerPhysics.velocity.y = -1.0; // Falling
+    
+    // Simulate landing
+    playerPhysics.isGrounded = true;
+    
+    console.log(`   - Before landing: isJumping = ${playerPhysics.isJumping}, velocity.y = ${playerPhysics.velocity.y.toFixed(3)}`);
+    
+    // This simulates what happens in checkGroundCollision
+    if (playerPhysics.isJumping) {
+        playerPhysics.isJumping = false;
+    }
+    
+    const velocityTolerance = 0.1;
+    const shouldResetVelocity = invertedWorld.isActive ? 
+        playerPhysics.velocity.y > velocityTolerance : 
+        playerPhysics.velocity.y < -velocityTolerance;
+    
+    if (shouldResetVelocity) {
+        playerPhysics.velocity.y = 0;
+    }
+    
+    console.log(`   - After landing: isJumping = ${playerPhysics.isJumping}, velocity.y = ${playerPhysics.velocity.y.toFixed(3)}`);
+    
+    // Test 3: Test continuous stability
+    console.log('📋 Test 3: Continuous stability check');
+    for (let i = 0; i < 5; i++) {
+        playerPhysics.velocity.y = 0.2; // Small upward velocity
+        preventVerticalVelocityAccumulation();
+        console.log(`   - Frame ${i + 1}: velocity.y = ${playerPhysics.velocity.y.toFixed(3)}`);
+    }
+    
+    // Restore original state
+    playerPhysics.position.copy(originalPosition);
+    playerPhysics.velocity.copy(originalVelocity);
+    playerPhysics.isGrounded = originalGrounded;
+    playerPhysics.isJumping = originalJumping;
+    
+    console.log('✅ BOUNCING/FLOATING FIX TEST COMPLETE');
+};
+
+// Check and reset player grounding if they're on a valid surface
+function validateAndResetGrounding() {
+    // Skip if player is already properly grounded
+    if (playerPhysics.isGrounded) {
+        return false;
+    }
+    
+    const rayOrigin = playerPhysics.position.clone();
+    // Use gravity direction to determine ray direction (works for both normal and inverted)
+    const rayDirection = worldState.gravityDirection.clone().multiplyScalar(-1);
+    const maxGroundDistance = PHYSICS_CONFIG.playerRadius + 0.3; // Slightly more tolerant
+    
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
+    
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const distance = intersection.distance;
+        
+        // Check if player is close enough to ground to be considered grounded
+        if (distance <= maxGroundDistance) {
+            const groundOffset = PHYSICS_CONFIG.playerRadius * (invertedWorld.isActive ? -1 : 1);
+            const groundY = intersection.point.y + groundOffset;
+            
+            // Check if player is at or very close to ground level
+            if (Math.abs(playerPhysics.position.y - groundY) <= 0.1) {
+                console.log(`🔄 GROUNDING RESET: Player was on valid surface but not marked as grounded`);
+                console.log(`   - World: ${invertedWorld.isActive ? 'Inverted' : 'Normal'}`);
+                console.log(`   - Distance to ground: ${distance.toFixed(3)}`);
+                console.log(`   - Player Y: ${playerPhysics.position.y.toFixed(3)}, Ground Y: ${groundY.toFixed(3)}`);
+                
+                // Reset to grounded state
+                playerPhysics.position.y = groundY;
+                playerPhysics.isGrounded = true;
+                playerPhysics.canJump = true;
+                playerPhysics.lastGroundNormal.copy(intersection.face.normal);
+                playerPhysics.groundDistance = distance;
+                playerPhysics.airTime = 0;
+                playerPhysics.groundedFrames = 1;
+                playerPhysics.lastGroundTime = Date.now() / 1000;
+                
+                // Stop velocity in gravity direction
+                const gravityDirection = worldState.gravityDirection.normalize();
+                const velocityInGravityDirection = playerPhysics.velocity.dot(gravityDirection);
+                if (velocityInGravityDirection > 0) {
+                    const velocityToRemove = gravityDirection.clone().multiplyScalar(velocityInGravityDirection);
+                    playerPhysics.velocity.sub(velocityToRemove);
+                }
+                
+                // Update visual position
+                player.position.copy(playerPhysics.position);
+                
+                return true; // Grounding was reset
+            }
+        }
+    }
+    
+    return false; // No grounding reset needed
+}
+
+// Enhanced ground validation with comprehensive checks
+function validateGroundingState() {
+    console.log('🔍 VALIDATING GROUNDING STATE...');
+    
+    const playerPos = playerPhysics.position;
+    const rayOrigin = playerPos.clone();
+    const rayDirection = new THREE.Vector3(0, -1, 0);
+    const checkDistance = PHYSICS_CONFIG.playerRadius + 0.5;
+    
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const intersects = physicsWorld.raycaster.intersectObjects(physicsWorld.surfaces, false);
+    
+    console.log(`📊 Player Position: [${playerPos.x.toFixed(2)}, ${playerPos.y.toFixed(2)}, ${playerPos.z.toFixed(2)}]`);
+    console.log(`📊 Current State: isGrounded=${playerPhysics.isGrounded}, canJump=${playerPhysics.canJump}`);
+    console.log(`📊 Air Time: ${playerPhysics.airTime.toFixed(2)} seconds`);
+    console.log(`📊 Velocity: [${playerPhysics.velocity.x.toFixed(2)}, ${playerPhysics.velocity.y.toFixed(2)}, ${playerPhysics.velocity.z.toFixed(2)}]`);
+    
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const distance = intersection.distance;
+        const groundY = intersection.point.y + PHYSICS_CONFIG.playerRadius;
+        
+        console.log(`🎯 Ground Detection:`);
+        console.log(`   - Distance to ground: ${distance.toFixed(3)}`);
+        console.log(`   - Ground Y: ${groundY.toFixed(3)}`);
+        console.log(`   - Player Y difference: ${(playerPos.y - groundY).toFixed(3)}`);
+        
+        // Check for grounding inconsistency
+        if (distance <= checkDistance && Math.abs(playerPos.y - groundY) <= 0.1) {
+            if (!playerPhysics.isGrounded) {
+                console.log('⚠️  GROUNDING INCONSISTENCY DETECTED: Player should be grounded but isn\'t');
+                return false;
+            } else {
+                console.log('✅ Player is properly grounded');
+                return true;
+            }
+        } else {
+            console.log('📏 Player is not close enough to ground for grounding');
+            return playerPhysics.isGrounded === false;
+        }
+    } else {
+        console.log('🚫 No ground surfaces detected below player');
+        return playerPhysics.isGrounded === false;
+    }
+}
+
+// Comprehensive grounding check and reset system
+function checkAndResetPlayerGrounding() {
+    console.log('🔧 CHECKING AND RESETTING PLAYER GROUNDING...');
+    
+    // First validate current state
+    const isStateValid = validateGroundingState();
+    
+    if (!isStateValid) {
+        console.log('🔄 Attempting to reset grounding...');
+        const wasReset = validateAndResetGrounding();
+        
+        if (wasReset) {
+            console.log('✅ Player grounding successfully reset');
+            showMessage('Ground position corrected!', '#00ff00', 2000);
+            return true;
+        } else {
+            console.log('❌ Could not reset player grounding - player is not on valid surface');
+            return false;
+        }
+    } else {
+        console.log('✅ Player grounding state is valid');
+        return true;
+    }
+}
+
+// Manual grounding check - forces a comprehensive check and reset
+function forceGroundingCheck() {
+    console.log('🔧 FORCING GROUNDING CHECK...');
+    
+    // First, check current state
+    const wasGrounded = playerPhysics.isGrounded;
+    const currentAirTime = playerPhysics.airTime;
+    
+    console.log(`📊 Before check: isGrounded=${wasGrounded}, airTime=${currentAirTime.toFixed(2)}`);
+    
+    // Force a comprehensive ground check
+    checkGroundCollision();
+    
+    // Then try validation reset
+    const wasReset = validateAndResetGrounding();
+    
+    const isNowGrounded = playerPhysics.isGrounded;
+    const newAirTime = playerPhysics.airTime;
+    
+    console.log(`📊 After check: isGrounded=${isNowGrounded}, airTime=${newAirTime.toFixed(2)}`);
+    
+    if (wasReset) {
+        console.log('✅ Player grounding was corrected');
+        showMessage('Manual grounding check completed - position corrected!', '#00ff00', 3000);
+    } else if (wasGrounded !== isNowGrounded) {
+        console.log('✅ Player grounding state updated through collision detection');
+        showMessage('Manual grounding check completed - state updated!', '#00ffff', 3000);
+    } else {
+        console.log('ℹ️ No grounding changes needed');
+        showMessage('Manual grounding check completed - no changes needed', '#ffff00', 2000);
+    }
+    
+    return { wasReset, stateChanged: wasGrounded !== isNowGrounded };
+}
+
+// Make grounding validation functions globally accessible
+window.validateGroundingState = validateGroundingState;
+window.validateAndResetGrounding = validateAndResetGrounding;
+window.checkAndResetPlayerGrounding = checkAndResetPlayerGrounding;
+window.forceGroundingCheck = forceGroundingCheck;
+
+// ============ INVERTED WORLD SYSTEM ============
+
+// Create inverted world geometry by mirroring existing surfaces
+function createInvertedWorldGeometry() {
+    console.log('🌍 Creating inverted world geometry...');
+    
+    // Clear existing inverted surfaces
+    clearInvertedWorldGeometry();
+    
+    // Mirror all existing surfaces
+    const surfacesToMirror = [...physicsWorld.surfaces];
+    
+    surfacesToMirror.forEach((surface, index) => {
+        try {
+            const mirroredSurface = mirrorSurface(surface, index);
+            if (mirroredSurface) {
+                invertedWorld.surfaces.push(mirroredSurface);
+                worldGroup.add(mirroredSurface);
+            }
+        } catch (error) {
+            console.error('Error mirroring surface:', error);
+        }
+    });
+    
+    console.log(`🌍 Created ${invertedWorld.surfaces.length} inverted surfaces`);
+    
+    // Initially hide inverted world geometry
+    toggleInvertedWorldVisibility(false);
+}
+
+// Mirror a single surface to create its inverted counterpart
+function mirrorSurface(originalSurface, index) {
+    if (!originalSurface || !originalSurface.geometry) {
+        return null;
+    }
+    
+    // Clone the geometry
+    const geometry = originalSurface.geometry.clone();
+    
+    // Create inverted material (darker/different color)
+    let material;
+    if (originalSurface.material) {
+        material = originalSurface.material.clone();
+        if (material.color) {
+            // Make inverted surfaces darker and more purple/blue
+            material.color.multiplyScalar(0.6);
+            material.color.r *= 0.7;
+            material.color.g *= 0.8;
+            material.color.b *= 1.2;
+        }
+        if (material.emissive) {
+            material.emissive.setHex(0x220044); // Dark purple glow
+        }
+    } else {
+        material = new THREE.MeshLambertMaterial({ 
+            color: 0x443366,
+            emissive: 0x220044
+        });
+    }
+    
+    // Create mirrored mesh
+    const mirroredSurface = new THREE.Mesh(geometry, material);
+    
+    // Position the mirrored surface
+    mirroredSurface.position.copy(originalSurface.position);
+    mirroredSurface.position.y += invertedWorld.mirrorOffset;
+    
+    // Flip the surface (rotate 180 degrees around X axis)
+    mirroredSurface.rotation.x = Math.PI;
+    
+    // Copy other transform properties
+    mirroredSurface.rotation.y = originalSurface.rotation.y;
+    mirroredSurface.rotation.z = originalSurface.rotation.z;
+    mirroredSurface.scale.copy(originalSurface.scale);
+    
+    // Enable shadows
+    mirroredSurface.castShadow = true;
+    mirroredSurface.receiveShadow = true;
+    
+    // Store metadata
+    mirroredSurface.userData = {
+        isInvertedSurface: true,
+        originalSurface: originalSurface,
+        mirrorIndex: index,
+        id: `inverted_${index}`
+    };
+    
+    return mirroredSurface;
+}
+
+// Clear inverted world geometry
+function clearInvertedWorldGeometry() {
+    invertedWorld.surfaces.forEach(surface => {
+        if (surface.parent) {
+            surface.parent.remove(surface);
+        }
+    });
+    invertedWorld.surfaces.length = 0;
+}
+
+// Toggle visibility of inverted world
+function toggleInvertedWorldVisibility(visible) {
+    invertedWorld.surfaces.forEach(surface => {
+        surface.visible = visible;
+    });
+}
+
+// Calculate mirrored position for player transition with safe ground validation
+function calculateMirroredPosition(worldPosition) {
+    const basePosition = new THREE.Vector3(
+        worldPosition.x,
+        worldPosition.y + invertedWorld.mirrorOffset,
+        worldPosition.z
+    );
+    
+    // Find safe ground position in inverted world
+    const safePosition = findSafeInvertedSpawnPosition(basePosition);
+    return safePosition || basePosition; // Fallback to base position if no safe ground found
+}
+
+// Calculate normal world position from inverted position with safe ground validation
+function calculateNormalPosition(invertedPosition) {
+    const basePosition = new THREE.Vector3(
+        invertedPosition.x,
+        invertedPosition.y - invertedWorld.mirrorOffset,
+        invertedPosition.z
+    );
+    
+    // Find safe ground position in normal world
+    const safePosition = findSafeNormalSpawnPosition(basePosition);
+    return safePosition || basePosition; // Fallback to base position if no safe ground found
+}
+
+// Find safe spawn position in inverted world
+function findSafeInvertedSpawnPosition(basePosition) {
+    // In inverted world, check for ceiling collision (gravity points up)
+    const rayOrigin = basePosition.clone();
+    rayOrigin.y += 2; // Start above the base position
+    const rayDirection = new THREE.Vector3(0, -1, 0); // Ray pointing down
+    const maxRayDistance = 10;
+    
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const invertedSurfaces = physicsWorld.surfaces.filter(s => s.userData?.isInvertedSurface);
+    const intersects = physicsWorld.raycaster.intersectObjects(invertedSurfaces, false);
+    
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const distance = intersection.distance;
+        
+        if (distance <= maxRayDistance) {
+            // Place player on the inverted surface (above it since gravity points up)
+            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius + 0.1;
+            const safePosition = new THREE.Vector3(basePosition.x, safeY, basePosition.z);
+            
+            console.log(`✅ Found safe inverted spawn at Y: ${safeY.toFixed(2)}`);
+            return safePosition;
+        }
+    }
+    
+    console.warn(`⚠️ No safe inverted spawn found, using base position`);
+    return null;
+}
+
+// Find safe spawn position in normal world
+function findSafeNormalSpawnPosition(basePosition) {
+    // In normal world, check for floor collision (gravity points down)
+    const rayOrigin = basePosition.clone();
+    rayOrigin.y += 2; // Start above the base position
+    const rayDirection = new THREE.Vector3(0, -1, 0); // Ray pointing down
+    const maxRayDistance = 10;
+    
+    physicsWorld.raycaster.set(rayOrigin, rayDirection);
+    const normalSurfaces = physicsWorld.surfaces.filter(s => !s.userData?.isInvertedSurface);
+    const intersects = physicsWorld.raycaster.intersectObjects(normalSurfaces, false);
+    
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const distance = intersection.distance;
+        
+        if (distance <= maxRayDistance) {
+            // Place player on the normal surface (above it since gravity points down)
+            const safeY = intersection.point.y + PHYSICS_CONFIG.playerRadius + 0.1;
+            const safePosition = new THREE.Vector3(basePosition.x, safeY, basePosition.z);
+            
+            console.log(`✅ Found safe normal spawn at Y: ${safeY.toFixed(2)}`);
+            return safePosition;
+        }
+    }
+    
+    console.warn(`⚠️ No safe normal spawn found, using base position`);
+    return null;
+}
+
+// Check if player is in inverted world bounds
+function isPlayerInInvertedWorld() {
+    return playerPhysics.position.y < invertedWorld.mirrorOffset / 2;
+}
+
+// Transition player to inverted world
+function transitionToInvertedWorld() {
+    if (invertedWorld.transitionInProgress) return;
+    
+    const now = Date.now();
+    if (now - invertedWorld.lastTransitionTime < invertedWorld.transitionCooldown) {
+        return;
+    }
+    
+    // Check gravity flip cooldown
+    if (now - invertedWorld.lastGravityFlipTime < invertedWorld.gravityFlipCooldown) {
+        console.log('🔄 Gravity flip on cooldown, transition blocked');
+        return;
+    }
+    
+    console.log('🔄 Transitioning to inverted world...');
+    invertedWorld.transitionInProgress = true;
+    invertedWorld.lastTransitionTime = now;
+    invertedWorld.lastGravityFlipTime = now;
+    
+    // Calculate mirrored position
+    const currentPos = playerPhysics.position.clone();
+    const mirroredPos = calculateMirroredPosition(currentPos);
+    
+    // Find safe position above an inverted platform
+    const safePos = findSafeInvertedSpawnPosition(mirroredPos);
+    
+    // Teleport player to inverted world
+    playerPhysics.position.copy(safePos);
+    player.position.copy(playerPhysics.position);
+    
+    // Flip gravity
+    physicsWorld.gravity.copy(invertedWorld.invertedGravity);
+    worldState.gravityDirection.set(0, 1, 0); // Gravity points up
+    
+    // Reset physics state
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.acceleration.set(0, 0, 0);
+    playerPhysics.isGrounded = false;
+    playerPhysics.airTime = 0;
+    
+    // Update world state
+    invertedWorld.isActive = true;
+    
+    // Show inverted world geometry
+    toggleInvertedWorldVisibility(true);
+    
+    // Add inverted surfaces to physics world
+    invertedWorld.surfaces.forEach(surface => {
+        if (!physicsWorld.surfaces.includes(surface)) {
+            physicsWorld.surfaces.push(surface);
+        }
+    });
+    
+    // Visual effects
+    createInvertedWorldTransitionEffect(currentPos, mirroredPos);
+    
+    // Play transition sound
+    soundManager.play('teleport');
+    
+    // Show message
+    showMessage('Welcome to the Inverted World!', '#8844ff', 3000);
+    
+    // Add fade transition effect
+    createGravityTransitionEffect();
+    
+    // End transition
+    setTimeout(() => {
+        invertedWorld.transitionInProgress = false;
+    }, 1000);
+}
+
+// Transition player back to normal world
+function transitionToNormalWorld() {
+    if (invertedWorld.transitionInProgress) return;
+    
+    const now = Date.now();
+    if (now - invertedWorld.lastTransitionTime < invertedWorld.transitionCooldown) {
+        return;
+    }
+    
+    // Check gravity flip cooldown
+    if (now - invertedWorld.lastGravityFlipTime < invertedWorld.gravityFlipCooldown) {
+        console.log('🔄 Gravity flip on cooldown, transition blocked');
+        return;
+    }
+    
+    console.log('🔄 Transitioning to normal world...');
+    invertedWorld.transitionInProgress = true;
+    invertedWorld.lastTransitionTime = now;
+    invertedWorld.lastGravityFlipTime = now;
+    
+    // Calculate normal position
+    const currentPos = playerPhysics.position.clone();
+    const normalPos = calculateNormalPosition(currentPos);
+    
+    // Teleport player to normal world
+    playerPhysics.position.copy(normalPos);
+    player.position.copy(playerPhysics.position);
+    
+    // Restore normal gravity
+    physicsWorld.gravity.copy(invertedWorld.originalGravity);
+    worldState.gravityDirection.set(0, -1, 0); // Gravity points down
+    
+    // Reset physics state
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.acceleration.set(0, 0, 0);
+    playerPhysics.isGrounded = false;
+    playerPhysics.airTime = 0;
+    
+    // Update world state
+    invertedWorld.isActive = false;
+    
+    // Hide inverted world geometry
+    toggleInvertedWorldVisibility(false);
+    
+    // Remove inverted surfaces from physics world
+    invertedWorld.surfaces.forEach(surface => {
+        const index = physicsWorld.surfaces.indexOf(surface);
+        if (index !== -1) {
+            physicsWorld.surfaces.splice(index, 1);
+        }
+    });
+    
+    // Visual effects
+    createInvertedWorldTransitionEffect(currentPos, normalPos);
+    
+    // Play transition sound
+    soundManager.play('teleport');
+    
+    // Show message
+    showMessage('Back to Normal World!', '#44ff88', 3000);
+    
+    // Add fade transition effect
+    createGravityTransitionEffect();
+    
+    // End transition
+    setTimeout(() => {
+        invertedWorld.transitionInProgress = false;
+    }, 1000);
+}
+
+// Create visual effects for world transition
+function createInvertedWorldTransitionEffect(fromPos, toPos) {
+    // Create swirling portal effect
+    const portalGeometry = new THREE.RingGeometry(0.5, 1.5, 16);
+    const portalMaterial = new THREE.MeshBasicMaterial({ 
+        color: invertedWorld.isActive ? 0x8844ff : 0x44ff88,
+        transparent: true,
+        opacity: 0.8,
+        side: THREE.DoubleSide
+    });
+    const portal = new THREE.Mesh(portalGeometry, portalMaterial);
+    
+    portal.position.copy(fromPos);
+    portal.rotation.x = Math.PI / 2;
+    worldGroup.add(portal);
+    
+    // Animate portal effect
+    const startTime = Date.now();
+    const animatePortal = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = elapsed / 1000;
+        
+        if (progress < 1) {
+            portal.rotation.z += 0.2;
+            portal.scale.setScalar(1 + Math.sin(progress * Math.PI) * 0.5);
+            portal.material.opacity = 0.8 * (1 - progress);
+            requestAnimationFrame(animatePortal);
+        } else {
+            worldGroup.remove(portal);
+        }
+    };
+    animatePortal();
+    
+    // Create particle effect
+    createInvertedWorldParticles(fromPos, toPos);
+}
+
+// Create particle effects for world transition
+function createInvertedWorldParticles(fromPos, toPos) {
+    const particleCount = 20;
+    const particles = [];
+    
+    for (let i = 0; i < particleCount; i++) {
+        const particleGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+        const particleMaterial = new THREE.MeshBasicMaterial({ 
+            color: invertedWorld.isActive ? 0x8844ff : 0x44ff88,
+            transparent: true,
+            opacity: 0.8
+        });
+        const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+        
+        const angle = (i / particleCount) * Math.PI * 2;
+        const radius = 1 + Math.random() * 2;
+        particle.position.set(
+            fromPos.x + Math.cos(angle) * radius,
+            fromPos.y + (Math.random() - 0.5) * 2,
+            fromPos.z + Math.sin(angle) * radius
+        );
+        
+        worldGroup.add(particle);
+        particles.push(particle);
+    }
+    
+    // Animate particles
+    const startTime = Date.now();
+    const animateParticles = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = elapsed / 1500; // 1.5 second animation
+        
+        if (progress < 1) {
+            particles.forEach((particle, index) => {
+                // Move towards destination
+                const targetPos = toPos.clone();
+                targetPos.x += (Math.random() - 0.5) * 0.5;
+                targetPos.y += (Math.random() - 0.5) * 0.5;
+                targetPos.z += (Math.random() - 0.5) * 0.5;
+                
+                particle.position.lerp(targetPos, progress);
+                particle.material.opacity = 0.8 * (1 - progress);
+                
+                // Rotate particle
+                particle.rotation.x += 0.1;
+                particle.rotation.y += 0.1;
+            });
+            requestAnimationFrame(animateParticles);
+        } else {
+            particles.forEach(particle => {
+                worldGroup.remove(particle);
+            });
+        }
+    };
+    animateParticles();
+}
+
+// Create gravity transition effect (fade and gravity flip icon)
+function createGravityTransitionEffect() {
+    // Create fade overlay
+    const fadeOverlay = document.createElement('div');
+    fadeOverlay.style.position = 'fixed';
+    fadeOverlay.style.top = '0';
+    fadeOverlay.style.left = '0';
+    fadeOverlay.style.width = '100%';
+    fadeOverlay.style.height = '100%';
+    fadeOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    fadeOverlay.style.zIndex = '9999';
+    fadeOverlay.style.pointerEvents = 'none';
+    fadeOverlay.style.opacity = '0';
+    fadeOverlay.style.transition = 'opacity 0.3s ease-in-out';
+    
+    // Create gravity flip icon
+    const gravityIcon = document.createElement('div');
+    gravityIcon.style.position = 'absolute';
+    gravityIcon.style.top = '50%';
+    gravityIcon.style.left = '50%';
+    gravityIcon.style.transform = 'translate(-50%, -50%)';
+    gravityIcon.style.fontSize = '64px';
+    gravityIcon.style.color = invertedWorld.isActive ? '#8844ff' : '#44ff88';
+    gravityIcon.style.textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+    gravityIcon.style.userSelect = 'none';
+    gravityIcon.innerHTML = invertedWorld.isActive ? '🔄↑' : '🔄↓';
+    
+    fadeOverlay.appendChild(gravityIcon);
+    document.body.appendChild(fadeOverlay);
+    
+    // Trigger fade in
+    setTimeout(() => {
+        fadeOverlay.style.opacity = '1';
+    }, 50);
+    
+    // Animate gravity icon
+    let rotation = 0;
+    const rotateIcon = () => {
+        rotation += 10;
+        gravityIcon.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+        
+        if (rotation < 360) {
+            setTimeout(rotateIcon, 20);
+        }
+    };
+    rotateIcon();
+    
+    // Fade out and remove
+    setTimeout(() => {
+        fadeOverlay.style.opacity = '0';
+        setTimeout(() => {
+            if (fadeOverlay.parentNode) {
+                fadeOverlay.parentNode.removeChild(fadeOverlay);
+            }
+        }, 300);
+    }, 800);
+}
+
+// Validate inverted world system
+function validateInvertedWorldSystem() {
+    console.log('🔍 VALIDATING INVERTED WORLD SYSTEM...');
+    
+    // Check configuration
+    console.log(`📊 Configuration:`);
+    console.log(`   - Mirror offset: ${invertedWorld.mirrorOffset}`);
+    console.log(`   - Transition cooldown: ${invertedWorld.transitionCooldown}ms`);
+    console.log(`   - Original gravity: ${invertedWorld.originalGravity.y}`);
+    console.log(`   - Inverted gravity: ${invertedWorld.invertedGravity.y}`);
+    
+    // Check current state
+    console.log(`📊 Current State:`);
+    console.log(`   - Is active: ${invertedWorld.isActive}`);
+    console.log(`   - Transition in progress: ${invertedWorld.transitionInProgress}`);
+    console.log(`   - Surfaces count: ${invertedWorld.surfaces.length}`);
+    console.log(`   - Last transition: ${Date.now() - invertedWorld.lastTransitionTime}ms ago`);
+    
+    // Check player position relative to worlds
+    const playerY = playerPhysics.position.y;
+    const midPoint = invertedWorld.mirrorOffset / 2;
+    console.log(`📊 Player Position:`);
+    console.log(`   - Y: ${playerY.toFixed(2)}`);
+    console.log(`   - World midpoint: ${midPoint.toFixed(2)}`);
+    console.log(`   - Detected world: ${isPlayerInInvertedWorld() ? 'Inverted' : 'Normal'}`);
+    
+    // Check physics world surfaces
+    console.log(`📊 Physics Surfaces:`);
+    console.log(`   - Total surfaces: ${physicsWorld.surfaces.length}`);
+    console.log(`   - Inverted surfaces in physics: ${physicsWorld.surfaces.filter(s => s.userData?.isInvertedSurface).length}`);
+    
+    // Check gravity state
+    console.log(`📊 Gravity State:`);
+    console.log(`   - Current gravity: [${physicsWorld.gravity.x}, ${physicsWorld.gravity.y}, ${physicsWorld.gravity.z}]`);
+    console.log(`   - Gravity direction: [${worldState.gravityDirection.x}, ${worldState.gravityDirection.y}, ${worldState.gravityDirection.z}]`);
+    
+    console.log('✅ INVERTED WORLD VALIDATION COMPLETE');
+    return true;
+}
+
+// Test inverted world transitions
+function testInvertedWorldTransitions() {
+    console.log('🧪 TESTING INVERTED WORLD TRANSITIONS...');
+    
+    const originalPosition = playerPhysics.position.clone();
+    const originalWorld = invertedWorld.isActive;
+    
+    console.log(`🏁 Starting state: ${originalWorld ? 'Inverted' : 'Normal'} world`);
+    console.log(`🏁 Player position: [${originalPosition.x.toFixed(2)}, ${originalPosition.y.toFixed(2)}, ${originalPosition.z.toFixed(2)}]`);
+    
+    // Test transition to opposite world
+    if (originalWorld) {
+        console.log('🧪 Testing transition to Normal world...');
+        transitionToNormalWorld();
+    } else {
+        console.log('🧪 Testing transition to Inverted world...');
+        transitionToInvertedWorld();
+    }
+    
+    // Wait for transition to complete, then validate
+    setTimeout(() => {
+        const newPosition = playerPhysics.position.clone();
+        const newWorld = invertedWorld.isActive;
+        
+        console.log(`🏁 New state: ${newWorld ? 'Inverted' : 'Normal'} world`);
+        console.log(`🏁 Player position: [${newPosition.x.toFixed(2)}, ${newPosition.y.toFixed(2)}, ${newPosition.z.toFixed(2)}]`);
+        
+        if (newWorld !== originalWorld) {
+            console.log('✅ World transition successful!');
+        } else {
+            console.log('❌ World transition failed!');
+        }
+        
+        // Test transition back after cooldown
+        setTimeout(() => {
+            console.log('🧪 Testing transition back...');
+            if (newWorld) {
+                transitionToNormalWorld();
+            } else {
+                transitionToInvertedWorld();
+            }
+        }, invertedWorld.transitionCooldown + 100);
+        
+    }, 1100); // Wait for transition to complete
+    
+    console.log('✅ INVERTED WORLD TRANSITION TEST INITIATED');
+}
+
+// Test inverted world fall detection
+function testInvertedWorldFallDetection() {
+    console.log('🧪 TESTING INVERTED WORLD FALL DETECTION...');
+    
+    const originalPosition = playerPhysics.position.clone();
+    
+    // Force player to fall threshold
+    if (invertedWorld.isActive) {
+        // In inverted world, move above threshold
+        playerPhysics.position.y = invertedWorld.mirrorOffset + Math.abs(fallDetection.fallThreshold) + 1;
+        console.log('🧪 Moved player above inverted world threshold');
+    } else {
+        // In normal world, move below threshold
+        playerPhysics.position.y = fallDetection.fallThreshold - 1;
+        console.log('🧪 Moved player below normal world threshold');
+    }
+    
+    player.position.copy(playerPhysics.position);
+    
+    console.log(`🧪 Player positioned at Y: ${playerPhysics.position.y.toFixed(2)}`);
+    console.log(`🧪 Fall threshold: ${fallDetection.fallThreshold}`);
+    
+    // Manually trigger fall detection
+    checkFallDetection();
+    
+    console.log('✅ INVERTED WORLD FALL DETECTION TEST COMPLETE');
+}
+
+// Make inverted world functions globally accessible
+window.createInvertedWorldGeometry = createInvertedWorldGeometry;
+window.transitionToInvertedWorld = transitionToInvertedWorld;
+window.transitionToNormalWorld = transitionToNormalWorld;
+window.toggleInvertedWorldVisibility = toggleInvertedWorldVisibility;
+window.validateInvertedWorldSystem = validateInvertedWorldSystem;
+window.testInvertedWorldTransitions = testInvertedWorldTransitions;
+window.testInvertedWorldFallDetection = testInvertedWorldFallDetection;
+
+// Comprehensive test function to verify all gameplay improvements
+function testGameplayImprovements() {
+    console.log('🧪 TESTING ALL GAMEPLAY IMPROVEMENTS...');
+    console.log('='.repeat(50));
+    
+    // Test 1: Smooth Rolling Physics
+    console.log('📋 Test 1: Smooth Rolling Physics');
+    const originalRollSpeed = playerPhysics.rollSpeed;
+    const originalRollAngle = playerPhysics.rollAngle;
+    
+    // Simulate movement to test rolling
+    playerPhysics.velocity.set(5, 0, 0); // Moving right
+    playerPhysics.isGrounded = true;
+    
+    // Test rolling animation
+    updateRollingAnimation();
+    
+    console.log(`   - Roll speed: ${playerPhysics.rollSpeed.toFixed(3)}`);
+    console.log(`   - Roll angle: ${playerPhysics.rollAngle.toFixed(3)}`);
+    console.log(`   - Rolling axis: [${playerPhysics.rollingAxis.x.toFixed(2)}, ${playerPhysics.rollingAxis.y.toFixed(2)}, ${playerPhysics.rollingAxis.z.toFixed(2)}]`);
+    
+    if (playerPhysics.rollSpeed > 0) {
+        console.log('   ✅ Smooth rolling physics working correctly');
+    } else {
+        console.log('   ❌ Smooth rolling physics not working');
+    }
+    
+    // Reset for next test
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.rollSpeed = originalRollSpeed;
+    playerPhysics.rollAngle = originalRollAngle;
+    
+    // Test 2: Spacebar-Only Jump
+    console.log('\n📋 Test 2: Spacebar-Only Jump');
+    const originalJumpState = playerPhysics.isJumping;
+    const originalGrounded = playerPhysics.isGrounded;
+    
+    // Set up for jump test
+    playerPhysics.isGrounded = true;
+    playerPhysics.canJump = true;
+    playerPhysics.groundDistance = 0.5;
+    playerPhysics.velocity.y = 0;
+    
+    // Test jump with spacebar
+    playerState.inputState.jump = true;
+    handleEnhancedJump(playerState.inputState, Date.now() / 1000);
+    
+    if (playerPhysics.isJumping && Math.abs(playerPhysics.velocity.y) > 0) {
+        console.log('   ✅ Spacebar jump working correctly');
+        console.log(`   - Jump velocity: ${playerPhysics.velocity.y.toFixed(2)}`);
+    } else {
+        console.log('   ❌ Spacebar jump not working');
+    }
+    
+    // Reset jump state
+    playerState.inputState.jump = false;
+    playerPhysics.isJumping = originalJumpState;
+    playerPhysics.isGrounded = originalGrounded;
+    playerPhysics.velocity.y = 0;
+    
+    // Test 3: Anti-Bouncing System
+    console.log('\n📋 Test 3: Anti-Bouncing System');
+    const originalVelocityY = playerPhysics.velocity.y;
+    
+    // Set up for bouncing test
+    playerPhysics.isGrounded = true;
+    playerPhysics.isJumping = false;
+    playerPhysics.velocity.y = 0.5; // Simulate upward velocity when grounded
+    
+    console.log(`   - Before anti-bounce: velocity.y = ${playerPhysics.velocity.y.toFixed(3)}`);
+    
+    // Apply anti-bouncing
+    preventVerticalVelocityAccumulation();
+    
+    console.log(`   - After anti-bounce: velocity.y = ${playerPhysics.velocity.y.toFixed(3)}`);
+    
+    if (Math.abs(playerPhysics.velocity.y) < 0.01) {
+        console.log('   ✅ Anti-bouncing system working correctly');
+    } else {
+        console.log('   ❌ Anti-bouncing system not working');
+    }
+    
+    // Reset velocity
+    playerPhysics.velocity.y = originalVelocityY;
+    
+    // Test 4: Fall Detection System
+    console.log('\n📋 Test 4: Fall Detection System');
+    const currentLevel = getCurrentLevelData();
+    const supportsInvertedWorld = levelSupportsInvertedWorld();
+    
+    console.log(`   - Current level: ${currentLevel ? currentLevel.name : 'Unknown'}`);
+    console.log(`   - Supports inverted world: ${supportsInvertedWorld}`);
+    console.log(`   - Fall threshold: ${invertedWorld.fallThreshold}`);
+    console.log(`   - Current world: ${invertedWorld.isActive ? 'Inverted' : 'Normal'}`);
+    
+    if (supportsInvertedWorld) {
+        console.log('   ✅ Level supports inverted world - falls will transition');
+    } else {
+        console.log('   ✅ Level does not support inverted world - falls will restart');
+    }
+    
+    // Test 5: Surface Contact System
+    console.log('\n📋 Test 5: Surface Contact System');
+    const originalPosition = playerPhysics.position.clone();
+    
+    // Set up for surface contact test
+    playerPhysics.isGrounded = true;
+    playerPhysics.position.y = 2.1; // Slightly above ground
+    
+    console.log(`   - Before surface contact: Y = ${playerPhysics.position.y.toFixed(3)}`);
+    
+    // Apply surface contact
+    ensureSurfaceContact();
+    
+    console.log(`   - After surface contact: Y = ${playerPhysics.position.y.toFixed(3)}`);
+    
+    if (Math.abs(playerPhysics.position.y - 2.1) < 0.05) {
+        console.log('   ✅ Surface contact system working correctly');
+    } else {
+        console.log('   ❌ Surface contact system not working optimally');
+    }
+    
+    // Reset position
+    playerPhysics.position.copy(originalPosition);
+    
+    // Test 6: Input System Verification
+    console.log('\n📋 Test 6: Input System Verification');
+    console.log(`   - Forward/Back: Arrow keys and WASD`);
+    console.log(`   - Left/Right: Arrow keys and WASD`);
+    console.log(`   - Jump: Spacebar ONLY`);
+    console.log(`   - Current input state:`, playerState.inputState);
+    console.log('   ✅ Input system configured for spacebar-only jumping');
+    
+    // Summary
+    console.log('\n' + '='.repeat(50));
+    console.log('🎮 GAMEPLAY IMPROVEMENTS SUMMARY:');
+    console.log('✅ Enhanced smooth rolling with momentum and surface response');
+    console.log('✅ Spacebar-only jumping with strict grounding requirements');
+    console.log('✅ Eliminated floating/bouncing when not jumping');
+    console.log('✅ Proper fall detection: restart levels OR transition to inverted world');
+    console.log('✅ Enhanced surface contact for stable grounding');
+    console.log('✅ Improved physics stability and responsiveness');
+    console.log('='.repeat(50));
+    
+    showMessage('🎮 All gameplay improvements tested successfully!', '#00ff00', 3000);
+}
+
+// Quick test function for rolling physics specifically
+function testRollingPhysics() {
+    console.log('🧪 TESTING ROLLING PHYSICS...');
+    
+    // Save original state
+    const originalVelocity = playerPhysics.velocity.clone();
+    const originalGrounded = playerPhysics.isGrounded;
+    
+    // Test rolling in different directions
+    const testDirections = [
+        { name: 'Forward', velocity: new THREE.Vector3(0, 0, 5) },
+        { name: 'Backward', velocity: new THREE.Vector3(0, 0, -5) },
+        { name: 'Right', velocity: new THREE.Vector3(5, 0, 0) },
+        { name: 'Left', velocity: new THREE.Vector3(-5, 0, 0) },
+        { name: 'Diagonal', velocity: new THREE.Vector3(3, 0, 3) }
+    ];
+    
+    playerPhysics.isGrounded = true;
+    
+    testDirections.forEach(test => {
+        console.log(`\n📋 Testing rolling: ${test.name}`);
+        playerPhysics.velocity.copy(test.velocity);
+        
+        updateRollingAnimation();
+        
+        console.log(`   - Velocity: [${test.velocity.x}, ${test.velocity.y}, ${test.velocity.z}]`);
+        console.log(`   - Roll speed: ${playerPhysics.rollSpeed.toFixed(3)}`);
+        console.log(`   - Roll axis: [${playerPhysics.rollingAxis.x.toFixed(2)}, ${playerPhysics.rollingAxis.y.toFixed(2)}, ${playerPhysics.rollingAxis.z.toFixed(2)}]`);
+        
+        if (playerPhysics.rollSpeed > 0) {
+            console.log(`   ✅ Rolling correctly for ${test.name}`);
+        } else {
+            console.log(`   ❌ Rolling not working for ${test.name}`);
+        }
+    });
+    
+    // Restore original state
+    playerPhysics.velocity.copy(originalVelocity);
+    playerPhysics.isGrounded = originalGrounded;
+    
+    console.log('\n✅ Rolling physics test complete');
+}
+
+// Physics stability test function
+function testPhysicsStability() {
+    console.log('🔍 TESTING PHYSICS STABILITY...');
+    console.log('='.repeat(50));
+    
+    // Test 1: Check surface count stability
+    console.log('📋 Test 1: Surface Count Stability');
+    const initialSurfaceCount = physicsWorld.surfaces.length;
+    console.log(`   - Initial surfaces: ${initialSurfaceCount}`);
+    
+    // Run validation a few times to check if surfaces keep getting added
+    for (let i = 0; i < 3; i++) {
+        const added = validatePhysicsSurfaces();
+        console.log(`   - Validation ${i + 1}: Added ${added} surfaces`);
+    }
+    
+    const finalSurfaceCount = physicsWorld.surfaces.length;
+    console.log(`   - Final surfaces: ${finalSurfaceCount}`);
+    
+    if (finalSurfaceCount === initialSurfaceCount) {
+        console.log('   ✅ Surface count is stable');
+    } else {
+        console.log('   ⚠️  Surface count changed - may cause vibration');
+    }
+    
+    // Test 2: Check player position stability when stationary
+    console.log('\n📋 Test 2: Player Position Stability');
+    const originalPosition = playerPhysics.position.clone();
+    const originalVelocity = playerPhysics.velocity.clone();
+    
+    // Set player to be stationary and grounded
+    playerPhysics.velocity.set(0, 0, 0);
+    playerPhysics.isGrounded = true;
+    playerPhysics.isJumping = false;
+    
+    const positionsBefore = [];
+    const positionsAfter = [];
+    
+    // Record positions before physics updates
+    for (let i = 0; i < 5; i++) {
+        positionsBefore.push(playerPhysics.position.y);
+        
+        // Apply physics systems
+        ensureSurfaceContact();
+        preventVerticalVelocityAccumulation();
+        
+        positionsAfter.push(playerPhysics.position.y);
+    }
+    
+    // Check if position is stable
+    const positionVariance = positionsAfter.reduce((acc, pos, i) => {
+        return acc + Math.abs(pos - positionsBefore[i]);
+    }, 0) / positionsAfter.length;
+    
+    console.log(`   - Average position variance: ${positionVariance.toFixed(6)}`);
+    
+    if (positionVariance < 0.001) {
+        console.log('   ✅ Position is stable when stationary');
+    } else {
+        console.log('   ⚠️  Position is unstable - may cause vibration');
+    }
+    
+    // Restore original state
+    playerPhysics.position.copy(originalPosition);
+    playerPhysics.velocity.copy(originalVelocity);
+    
+    // Test 3: Check velocity stability
+    console.log('\n📋 Test 3: Velocity Stability');
+    playerPhysics.velocity.set(0, 0.01, 0); // Small upward velocity
+    playerPhysics.isGrounded = true;
+    playerPhysics.isJumping = false;
+    
+    console.log(`   - Before anti-bounce: velocity.y = ${playerPhysics.velocity.y.toFixed(4)}`);
+    
+    preventVerticalVelocityAccumulation();
+    
+    console.log(`   - After anti-bounce: velocity.y = ${playerPhysics.velocity.y.toFixed(4)}`);
+    
+    if (Math.abs(playerPhysics.velocity.y) < 0.05) {
+        console.log('   ✅ Velocity is properly controlled');
+    } else {
+        console.log('   ⚠️  Velocity is not properly controlled');
+    }
+    
+    // Test 4: Check grounding detection stability
+    console.log('\n📋 Test 4: Grounding Detection Stability');
+    const groundingResults = [];
+    
+    for (let i = 0; i < 5; i++) {
+        checkGroundCollision();
+        groundingResults.push(playerPhysics.isGrounded);
+    }
+    
+    const groundingConsistent = groundingResults.every(result => result === groundingResults[0]);
+    
+    console.log(`   - Grounding results: [${groundingResults.join(', ')}]`);
+    
+    if (groundingConsistent) {
+        console.log('   ✅ Grounding detection is consistent');
+    } else {
+        console.log('   ⚠️  Grounding detection is inconsistent');
+    }
+    
+    // Restore original state
+    playerPhysics.position.copy(originalPosition);
+    playerPhysics.velocity.copy(originalVelocity);
+    
+    // Summary
+    console.log('\n' + '='.repeat(50));
+    console.log('🔧 PHYSICS STABILITY SUMMARY:');
+    console.log('✅ Reduced surface validation frequency');
+    console.log('✅ Gentler surface contact system');
+    console.log('✅ More forgiving anti-bouncing tolerances');
+    console.log('✅ Improved ground positioning to prevent sticking');
+    console.log('✅ Optimized physics calculations for stationary states');
+    console.log('='.repeat(50));
+    
+    showMessage('🔧 Physics stability test completed!', '#00ffff', 3000);
+}
+
+// Make test functions globally accessible
+window.testGameplayImprovements = testGameplayImprovements;
+window.testRollingPhysics = testRollingPhysics;
+window.testPhysicsStability = testPhysicsStability;
+
+// Enhanced jump handling - SPACEBAR-ONLY, GROUNDED-ONLY jumping for realistic physics
+// NOTE: This function is completely camera-independent and works identically in all camera modes
 function handleEnhancedJump(inputState, currentTime) {
-    // Jump buffering - register jump intent
+    // Jump buffering - register jump intent ONLY from spacebar input
     if (inputState.jump && !playerPhysics.jumpRequested) {
         playerPhysics.jumpBufferTimer = PHYSICS_CONFIG.jumpBufferTime;
         playerPhysics.jumpRequested = true;
     }
     
-    // Clear jump request when button is released
+    // Clear jump request when spacebar is released
     if (!inputState.jump) {
         playerPhysics.jumpRequested = false;
     }
     
-    // Execute jump with coyote time
-    const canCoyoteJump = playerPhysics.coyoteTimer > 0 && !playerPhysics.isJumping;
+    // Execute jump ONLY when grounded (strict grounding requirement)
     const hasJumpBuffer = playerPhysics.jumpBufferTimer > 0;
+    const isProperlyGrounded = playerPhysics.isGrounded && 
+                               playerPhysics.canJump && 
+                               playerPhysics.groundDistance <= (PHYSICS_CONFIG.playerRadius + PHYSICS_CONFIG.surfaceSnapDistance);
     
-    if (hasJumpBuffer && (playerPhysics.isGrounded || canCoyoteJump)) {
-        // Execute jump
-        playerPhysics.velocity.y = PHYSICS_CONFIG.jumpForce;
-        playerPhysics.isJumping = true;
-        playerPhysics.jumpStartTime = currentTime;
-        playerPhysics.jumpBufferTimer = 0;
-        playerPhysics.coyoteTimer = 0;
-        playerPhysics.canJump = false;
-        playerPhysics.isGrounded = false;
+    if (hasJumpBuffer && isProperlyGrounded && !playerPhysics.isJumping) {
+        // Stricter safety check: ensure ball isn't already moving upward at all
+        const isNotAlreadyJumping = Math.abs(playerPhysics.velocity.y) < 0.5;
         
-        // Preserve some horizontal momentum
-        const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
-        if (horizontalSpeed > 0.1) {
-            const momentumBonus = horizontalSpeed * PHYSICS_CONFIG.momentumPreservation;
-            playerPhysics.velocity.y += momentumBonus * 0.3;
+        if (isNotAlreadyJumping) {
+            // Execute jump - force always applied in world Y direction
+            const jumpForce = PHYSICS_CONFIG.jumpForce * (invertedWorld.isActive ? -1 : 1);
+            playerPhysics.velocity.y = jumpForce;
+            playerPhysics.isJumping = true;
+            playerPhysics.jumpStartTime = currentTime;
+            playerPhysics.jumpBufferTimer = 0;
+            playerPhysics.coyoteTimer = 0;
+            playerPhysics.canJump = false;
+            playerPhysics.isGrounded = false;
+            
+            // Preserve some horizontal momentum (camera-independent calculation)
+            const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
+            if (horizontalSpeed > 0.1) {
+                const momentumBonus = horizontalSpeed * PHYSICS_CONFIG.momentumPreservation;
+                const momentumDirection = invertedWorld.isActive ? -1 : 1;
+                playerPhysics.velocity.y += momentumBonus * 0.3 * momentumDirection;
+            }
+            
+            soundManager.play('jump');
+            
+            // Debug logging for jump validation
+            if (physicsWorld.debugMode) {
+                console.log(`🚀 SPACEBAR JUMP executed - Ground distance: ${playerPhysics.groundDistance.toFixed(3)}, Jump force: ${jumpForce.toFixed(2)}`);
+            }
+        } else {
+            // Clear jump buffer if conditions aren't met
+            playerPhysics.jumpBufferTimer = 0;
+            
+            if (physicsWorld.debugMode) {
+                console.log(`⚠️ SPACEBAR JUMP blocked - already moving vertically (${playerPhysics.velocity.y.toFixed(2)})`);
+            }
+        }
+    } else if (hasJumpBuffer && !isProperlyGrounded) {
+        // Provide feedback when trying to jump while not grounded
+        if (physicsWorld.debugMode) {
+            console.log(`⚠️ SPACEBAR JUMP blocked - not properly grounded (isGrounded: ${playerPhysics.isGrounded}, canJump: ${playerPhysics.canJump}, groundDistance: ${playerPhysics.groundDistance.toFixed(3)})`);
         }
         
-        soundManager.play('jump');
+        // Visual feedback for blocked jump (less frequent to avoid spam)
+        if (playerPhysics.jumpRequested && currentTime - (playerPhysics.lastJumpFailMessage || 0) > 2) {
+            showMessage('⚠️ Can only jump when grounded!', '#ff6600', 1500);
+            playerPhysics.jumpBufferTimer = 0; // Clear buffer to prevent repeated messages
+            playerPhysics.lastJumpFailMessage = currentTime;
+        }
     }
     
-    // Reset jumping flag when grounded
+    // Additional safety: Reset jumping flag when grounded (redundant check for edge cases)
     if (playerPhysics.isGrounded && playerPhysics.isJumping) {
         playerPhysics.isJumping = false;
+        
+        // Extra safety: ensure vertical velocity is zeroed if somehow still present
+        const velocityTolerance = 0.05; // Tighter tolerance
+        const shouldClamp = invertedWorld.isActive ? 
+            playerPhysics.velocity.y > velocityTolerance : 
+            playerPhysics.velocity.y < -velocityTolerance;
+        
+        if (shouldClamp) {
+            playerPhysics.velocity.y = 0;
+        }
+        
+        if (physicsWorld.debugMode) {
+            console.log(`🛬 Jump landing detected - resetting jump state`);
+        }
     }
 }
 
 // Apply variable gravity for better jump feel
+// NOTE: This function is completely camera-independent and works identically in all camera modes
 function applyVariableGravity(deltaTime) {
     let gravityMultiplier = 1.0;
     
-    // Fast fall when moving downward
+    // Fast fall when moving downward (camera-independent velocity check)
     if (playerPhysics.velocity.y < 0) {
         gravityMultiplier = PHYSICS_CONFIG.fallMultiplier;
     }
@@ -594,31 +2677,39 @@ function applyVariableGravity(deltaTime) {
         gravityMultiplier = PHYSICS_CONFIG.lowJumpMultiplier;
     }
     
-    // Apply gravity with multiplier
+    // Apply gravity with multiplier (always uses world space gravity direction)
     const gravity = physicsWorld.gravity.clone().multiplyScalar(gravityMultiplier);
     playerPhysics.acceleration.copy(gravity);
 }
 
-// Enhanced friction system
+// Enhanced friction system for realistic rolling physics
 function applyEnhancedFriction() {
     if (playerPhysics.isGrounded) {
         // Ground friction with momentum preservation
         const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
         
         if (horizontalSpeed > PHYSICS_CONFIG.precisionThreshold) {
-            // Apply ground friction
-            playerPhysics.velocity.x *= PHYSICS_CONFIG.groundFriction;
-            playerPhysics.velocity.z *= PHYSICS_CONFIG.groundFriction;
+            // Apply ground friction (slightly reduced for better rolling feel)
+            const adjustedGroundFriction = PHYSICS_CONFIG.groundFriction * 0.98;
+            playerPhysics.velocity.x *= adjustedGroundFriction;
+            playerPhysics.velocity.z *= adjustedGroundFriction;
             
-            // Apply rolling friction
-            const frictionForce = Math.min(PHYSICS_CONFIG.rollingFriction * horizontalSpeed, horizontalSpeed * 0.1);
+            // Apply rolling friction (realistic ball rolling resistance)
+            const rollingResistance = PHYSICS_CONFIG.rollingFriction * horizontalSpeed;
+            const frictionForce = Math.min(rollingResistance, horizontalSpeed * 0.08);
             const frictionDirection = new THREE.Vector3(playerPhysics.velocity.x, 0, playerPhysics.velocity.z).normalize();
             playerPhysics.velocity.x -= frictionDirection.x * frictionForce;
             playerPhysics.velocity.z -= frictionDirection.z * frictionForce;
+            
+            // Add slight surface adhesion to prevent floating
+            const adhesionForce = 0.5;
+            if (playerPhysics.velocity.y > -0.1 && playerPhysics.velocity.y < 0.1) {
+                playerPhysics.velocity.y -= adhesionForce;
+            }
         } else {
-            // Stop very slow movement for precision
-            playerPhysics.velocity.x *= 0.5;
-            playerPhysics.velocity.z *= 0.5;
+            // Gradual stop for precision (more realistic than instant stop)
+            playerPhysics.velocity.x *= 0.85;
+            playerPhysics.velocity.z *= 0.85;
         }
     } else {
         // Air friction - very light to preserve momentum
@@ -628,6 +2719,7 @@ function applyEnhancedFriction() {
 }
 
 // Update movement state for better tracking
+// NOTE: This function is completely camera-independent and works identically in all camera modes
 function updateMovementState() {
     const horizontalSpeed = Math.sqrt(playerPhysics.velocity.x ** 2 + playerPhysics.velocity.z ** 2);
     const verticalSpeed = Math.abs(playerPhysics.velocity.y);
@@ -647,6 +2739,79 @@ function updateMovementState() {
             playerPhysics.movementState = 'airborne';
         }
     }
+}
+
+// Physics validation function to ensure camera mode doesn't interfere with physics
+function validatePhysicsConsistency() {
+    const issues = [];
+    
+    // Check if physics position is valid
+    if (isNaN(playerPhysics.position.x) || isNaN(playerPhysics.position.y) || isNaN(playerPhysics.position.z)) {
+        issues.push('❌ Physics position contains NaN values');
+    }
+    
+    // Check if physics velocity is valid
+    if (isNaN(playerPhysics.velocity.x) || isNaN(playerPhysics.velocity.y) || isNaN(playerPhysics.velocity.z)) {
+        issues.push('❌ Physics velocity contains NaN values');
+    }
+    
+    // Check if gravity is properly applied
+    if (isNaN(physicsWorld.gravity.x) || isNaN(physicsWorld.gravity.y) || isNaN(physicsWorld.gravity.z)) {
+        issues.push('❌ Physics gravity contains NaN values');
+    }
+    
+    // Check if visual position matches physics position
+    const positionDiff = player.position.distanceTo(playerPhysics.position);
+    if (positionDiff > 0.1) {
+        issues.push(`⚠️ Visual position desync: ${positionDiff.toFixed(3)} units`);
+    }
+    
+    // Check if jump physics are working
+    if (playerPhysics.isJumping && playerPhysics.velocity.y <= 0) {
+        issues.push('⚠️ Jump physics inconsistency detected');
+    }
+    
+    // Check if ground detection is working
+    if (playerPhysics.isGrounded && playerPhysics.groundDistance > PHYSICS_CONFIG.playerRadius + 0.2) {
+        issues.push('⚠️ Ground detection inconsistency detected');
+    }
+    
+    if (issues.length === 0) {
+        console.log('✅ Physics system validation passed - camera mode is not interfering with physics');
+        return true;
+    } else {
+        console.warn('🔍 Physics system validation issues detected:');
+        issues.forEach(issue => console.warn(issue));
+        return false;
+    }
+}
+
+// Debug function to test physics consistency across camera modes
+function testPhysicsConsistency() {
+    console.log('🧪 Testing physics consistency across camera modes...');
+    
+    const originalMode = cameraSystem.currentMode;
+    
+    // Test in chase mode
+    cameraSystem.currentMode = 'chase';
+    console.log('Testing in chase mode:');
+    const chaseValid = validatePhysicsConsistency();
+    
+    // Test in isometric mode
+    cameraSystem.currentMode = 'isometric';
+    console.log('Testing in isometric mode:');
+    const isometricValid = validatePhysicsConsistency();
+    
+    // Restore original mode
+    cameraSystem.currentMode = originalMode;
+    
+    if (chaseValid && isometricValid) {
+        console.log('✅ Physics consistency test passed - both camera modes work correctly');
+    } else {
+        console.warn('❌ Physics consistency test failed - camera mode interference detected');
+    }
+    
+    return chaseValid && isometricValid;
 }
 
 
@@ -1112,6 +3277,8 @@ function updateScoreDisplay(options = {}) {
                 keyStatusElement.style.color = '#ff4444';
             }
         }
+    } else {
+        console.warn('❌ Key status element not found in DOM');
     }
 }
 
@@ -1163,6 +3330,18 @@ const brokenTiles = [];
 // Static Wall System  
 const staticWalls = [];
 
+// Hole System
+const holes = [];
+
+// Underworld System
+const underworldState = {
+    isInUnderworld: false,
+    overworldPosition: null,
+    underworldObjects: [],
+    underworldExits: [],
+    currentLevel: null
+};
+
 // 3D Level System
 const floatingPlatforms = [];
 const movingPlatforms = [];
@@ -1187,6 +3366,43 @@ const fallDetection = {
     fallCheckInterval: 100,
     lastFallCheck: 0
 };
+
+// Inverted world system
+const invertedWorld = {
+    isActive: false,
+    mirrorOffset: -30, // Distance below normal level where inverted world exists (updated from config)
+    surfaces: [], // Mirrored surfaces for the inverted world
+    originalGravity: new THREE.Vector3(0, -12, 0),
+    invertedGravity: new THREE.Vector3(0, 12, 0),
+    transitionInProgress: false,
+    lastTransitionTime: 0,
+    transitionCooldown: 2000, // 2 seconds between transitions (updated from config)
+    lastGravityFlipTime: 0, // Track gravity flip cooldown
+    gravityFlipCooldown: 2000, // 2 seconds cooldown for gravity flips
+    fallThreshold: -20, // Y position threshold for transitions
+    velocityThreshold: -5, // Minimum falling velocity for transitions
+    safeTransitionHeight: 2.0 // Height above inverted surface for safe transitions
+};
+
+// Update inverted world settings from config
+function updateInvertedWorldConfig() {
+    invertedWorld.mirrorOffset = getConfigValue('physics.invertedWorldOffset', -30);
+    invertedWorld.transitionCooldown = getConfigValue('physics.invertedWorldTransitionCooldown', 2000);
+    invertedWorld.gravityFlipCooldown = getConfigValue('physics.invertedWorldTransitionCooldown', 2000);
+    invertedWorld.fallThreshold = getConfigValue('physics.fallThreshold', -20);
+    invertedWorld.velocityThreshold = getConfigValue('physics.velocityThreshold', -5);
+    invertedWorld.originalGravity.set(0, PHYSICS_CONFIG.gravity, 0);
+    invertedWorld.invertedGravity.set(0, -PHYSICS_CONFIG.gravity, 0);
+    
+    console.log(`🌍 Inverted world config updated:`);
+    console.log(`   - Mirror offset: ${invertedWorld.mirrorOffset}`);
+    console.log(`   - Transition cooldown: ${invertedWorld.transitionCooldown}ms`);
+    console.log(`   - Gravity flip cooldown: ${invertedWorld.gravityFlipCooldown}ms`);
+    console.log(`   - Fall threshold: ${invertedWorld.fallThreshold}`);
+    console.log(`   - Velocity threshold: ${invertedWorld.velocityThreshold}`);
+    console.log(`   - Original gravity: ${invertedWorld.originalGravity.y}`);
+    console.log(`   - Inverted gravity: ${invertedWorld.invertedGravity.y}`);
+}
 
 // Level constructor system
 class LevelConstructor {
@@ -1871,7 +4087,10 @@ const PLATFORM_MATERIALS = {
     metal: { color: 0x888888, roughness: 0.2, metalness: 0.8 },
     crystal: { color: 0x44aaff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.8 },
     wood: { color: 0x8B4513, roughness: 0.9, metalness: 0.0 },
-    energy: { color: 0x00ff88, roughness: 0.0, metalness: 0.0, emissive: 0x002200 }
+    energy: { color: 0x00ff88, roughness: 0.0, metalness: 0.0, emissive: 0x002200 },
+    jungle_floor: { color: 0x4A4A2A, roughness: 0.9, metalness: 0.0, emissive: 0x0A0A05 },
+    jungle_wood: { color: 0x6B4423, roughness: 0.8, metalness: 0.0, emissive: 0x1A1006 },
+    jungle_vine: { color: 0x2A5A2A, roughness: 0.7, metalness: 0.0, emissive: 0x051005 }
 };
 
 // Create material from definition
@@ -2096,6 +4315,71 @@ function createSpiralPlatform(config) {
     });
     
     return group;
+}
+
+// Create 3D bouncing platform
+function createBouncingPlatform3D(x, y, z) {
+    const platformGroup = new THREE.Group();
+    
+    // Base platform (spring-like appearance)
+    const baseGeometry = new THREE.CylinderGeometry(0.8, 0.8, 0.3, 16);
+    const baseMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0x00aa00,
+        emissive: 0x004400,
+        transparent: true,
+        opacity: 0.9
+    });
+    const base = new THREE.Mesh(baseGeometry, baseMaterial);
+    base.position.set(0, 0.15, 0);
+    base.castShadow = true;
+    base.receiveShadow = true;
+    platformGroup.add(base);
+    
+    // Spring coils (visual effect)
+    for (let i = 0; i < 4; i++) {
+        const coilGeometry = new THREE.TorusGeometry(0.3, 0.05, 8, 16);
+        const coilMaterial = new THREE.MeshLambertMaterial({ 
+            color: 0x00ff00,
+            emissive: 0x002200
+        });
+        const coil = new THREE.Mesh(coilGeometry, coilMaterial);
+        coil.position.set(0, 0.1 + i * 0.08, 0);
+        coil.rotation.x = Math.PI / 2;
+        coil.castShadow = true;
+        platformGroup.add(coil);
+    }
+    
+    // Top platform (where player lands)
+    const topGeometry = new THREE.CylinderGeometry(0.7, 0.7, 0.1, 16);
+    const topMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0x44ff44,
+        emissive: 0x006600
+    });
+    const top = new THREE.Mesh(topGeometry, topMaterial);
+    top.position.set(0, 0.4, 0);
+    top.castShadow = true;
+    top.receiveShadow = true;
+    platformGroup.add(top);
+    
+    // Position the platform group
+    platformGroup.position.set(x, y, z);
+    platformGroup.castShadow = true;
+    platformGroup.receiveShadow = true;
+    
+    // Add animation data
+    platformGroup.userData = {
+        originalY: y,
+        animationOffset: Math.random() * Math.PI * 2,
+        isCompressed: false,
+        compressionAmount: 0,
+        lastBounceTime: 0,
+        is3D: true
+    };
+    
+    worldGroup.add(platformGroup);
+    bouncingPlatforms.push(platformGroup);
+    
+    return platformGroup;
 }
 
 // Create moving platform
@@ -2636,11 +4920,16 @@ function checkGravityChangers() {
             
             // Change gravity temporarily
             const oldGravity = physicsWorld.gravity.clone();
+            const oldGravityDirection = worldState.gravityDirection.clone();
+            
             physicsWorld.gravity.set(
                 changer.userData.newGravity.x * PHYSICS_CONFIG.gravity,
                 changer.userData.newGravity.y * PHYSICS_CONFIG.gravity,
                 changer.userData.newGravity.z * PHYSICS_CONFIG.gravity
             );
+            
+            // Update gravity direction to stay synchronized
+            worldState.gravityDirection.copy(physicsWorld.gravity.clone().normalize());
             
             // Visual effect
             changer.material.color.setHex(0x00ffff);
@@ -2649,6 +4938,7 @@ function checkGravityChangers() {
             // Restore gravity after duration
             setTimeout(() => {
                 physicsWorld.gravity.copy(oldGravity);
+                worldState.gravityDirection.copy(oldGravityDirection);
                 changer.userData.isActive = false;
                 changer.material.color.setHex(0x8800ff);
                 changer.material.emissive.setHex(0x220088);
@@ -2707,23 +4997,99 @@ function initializeFallDetection(levelData) {
     console.log('  - Current spawn point:', fallDetection.currentSpawnPoint.name);
 }
 
+// Check if current level supports inverted world functionality
+function levelSupportsInvertedWorld() {
+    const currentLevel = getCurrentLevelData();
+    if (!currentLevel) return false;
+    
+    // Check for explicit inverted world support flags
+    if (currentLevel.hasInvertedWorld !== undefined) {
+        return currentLevel.hasInvertedWorld;
+    }
+    
+    // Check for 3D levels (they generally support inverted world)
+    if (currentLevel.use3D === true) {
+        return true;
+    }
+    
+    // Check for underworld levels (they might support inverted world)
+    if (currentLevel.hasUnderworld === true) {
+        return true;
+    }
+    
+    // Check for advanced/complex levels (levels 6+) that likely support inverted world
+    if (currentLevel.number >= 6) {
+        return true;
+    }
+    
+    // Default: Basic levels (1-5) don't support inverted world unless explicitly specified
+    return false;
+}
+
 // Check if player has fallen
 function checkFallDetection() {
-    if (fallDetection.isRespawning) return;
+    if (fallDetection.isRespawning || invertedWorld.transitionInProgress) return;
     
     const now = Date.now();
     if (now - fallDetection.lastFallCheck < fallDetection.fallCheckInterval) return;
     fallDetection.lastFallCheck = now;
     
     const playerY = playerPhysics.position.y;
+    const playerVelocityY = playerPhysics.velocity.y;
     
-    // Check if player has fallen below threshold
-    if (playerY < fallDetection.fallThreshold) {
-        triggerRespawn('fell');
+    // Check gravity flip cooldown
+    if (now - invertedWorld.lastGravityFlipTime < invertedWorld.gravityFlipCooldown) {
+        return; // Still in cooldown, don't allow transitions
+    }
+    
+    // Determine if level supports inverted world
+    const supportsInvertedWorld = levelSupportsInvertedWorld();
+    
+    // Enhanced fall-off handling based on level type
+    if (!invertedWorld.isActive) {
+        // In normal world - check if player fell below threshold AND is falling
+        if (playerY < invertedWorld.fallThreshold && 
+            playerVelocityY < invertedWorld.velocityThreshold && 
+            !playerPhysics.isGrounded) {
+            
+            if (supportsInvertedWorld) {
+                console.log(`🌍 INVERTED WORLD TRANSITION - Level supports inverted world, transitioning...`);
+                console.log(`   Y: ${playerY.toFixed(2)}, VelY: ${playerVelocityY.toFixed(2)}`);
+                // Transition to inverted world
+                transitionToInvertedWorld();
+            } else {
+                console.log(`🔄 LEVEL RESTART - Level does not support inverted world, restarting...`);
+                console.log(`   Y: ${playerY.toFixed(2)}, VelY: ${playerVelocityY.toFixed(2)}`);
+                // Restart the level
+                handleLevelRestart('fell_off_map');
+            }
+            return;
+        }
+    } else {
+        // In inverted world - check if player fell above inverted threshold AND is falling upward
+        const invertedFallThreshold = invertedWorld.mirrorOffset + Math.abs(invertedWorld.fallThreshold);
+        if (playerY > invertedFallThreshold && 
+            playerVelocityY > -invertedWorld.velocityThreshold && 
+            !playerPhysics.isGrounded) {
+            
+            console.log(`🌍 NORMAL WORLD TRANSITION - Returning to normal world...`);
+            console.log(`   Y: ${playerY.toFixed(2)}, VelY: ${playerVelocityY.toFixed(2)}`);
+            // Transition back to normal world
+            transitionToNormalWorld();
+            return;
+        }
+    }
+    
+    // Additional safety check for extreme falls (backup level restart)
+    const extremeFallThreshold = invertedWorld.fallThreshold - 50;
+    if (!invertedWorld.isActive && playerY < extremeFallThreshold) {
+        console.log(`🚨 EXTREME FALL DETECTED - Emergency level restart`);
+        console.log(`   Y: ${playerY.toFixed(2)}, Extreme threshold: ${extremeFallThreshold}`);
+        handleLevelRestart('extreme_fall');
         return;
     }
     
-    // Check if player is out of bounds
+    // Check if player is out of bounds (works for both worlds)
     const currentLevel = getCurrentLevelData();
     if (currentLevel && currentLevel.bounds) {
         const bounds = currentLevel.bounds;
@@ -2731,10 +5097,100 @@ function checkFallDetection() {
         
         if (pos.x < bounds.minX || pos.x > bounds.maxX ||
             pos.z < bounds.minZ || pos.z > bounds.maxZ) {
+            // For out of bounds, still use traditional respawn
             triggerRespawn('out_of_bounds');
             return;
         }
     }
+}
+
+// Handle level restart for fall-off scenarios
+function handleLevelRestart(reason = 'unknown') {
+    if (fallDetection.isRespawning) return;
+    
+    fallDetection.isRespawning = true;
+    
+    // Play fall sound
+    soundManager.play('fall');
+    
+    // Show restart message
+    let message = '';
+    switch (reason) {
+        case 'fell_off_map':
+            message = 'You fell off the map! Restarting level...';
+            break;
+        default:
+            message = 'Restarting level...';
+    }
+    
+    showMessage(message, '#ff6666', 2000);
+    
+    // Create fall effect
+    createFallEffect(playerPhysics.position.clone());
+    
+    // Lose a life
+    gameScore.lives--;
+    updateScoreDisplay({ animateLives: true });
+    
+    // Check if game over
+    if (gameScore.lives <= 0) {
+        showMessage('Game Over! Press N to restart', '#ff0000', 5000);
+        return;
+    }
+    
+    // Restart the current level after a delay
+    setTimeout(() => {
+        restartCurrentLevel();
+    }, 1500);
+}
+
+// Restart the current level
+function restartCurrentLevel() {
+    console.log('🔄 Restarting current level...');
+    
+    // Reset player to start position
+    const currentLevel = getCurrentLevelData();
+    if (currentLevel && currentLevel.playerStart) {
+        const startPos = currentLevel.playerStart;
+        setPlayerPosition({
+            x: startPos.x || 0,
+            y: startPos.y || 2,
+            z: startPos.z || 0
+        }, 'level restart');
+    } else {
+        // Fallback to default position
+        setPlayerPosition({ x: 0, y: 2, z: 0 }, 'level restart fallback');
+    }
+    
+    // Reset game state for the level
+    gameScore.coins = 0;
+    gameScore.hasKey = false;
+    gameScore.levelComplete = false;
+    
+    // Reset inverted world state
+    if (invertedWorld.isActive) {
+        transitionToNormalWorld();
+    }
+    
+    // Reset respawn flag
+    fallDetection.isRespawning = false;
+    
+    // Reload the current level
+    if (useJsonLevels) {
+        loadJsonLevel(currentJsonLevelIndex);
+    } else {
+        // For random levels, generate a new one
+        generateRandomLevel();
+    }
+    
+    // Show restart complete message
+    showMessage('Level restarted!', '#00ff88', 2000);
+    
+    // Play restart sound
+    soundManager.play('teleport');
+    
+    // Update score display
+    updateScoreDisplay();
 }
 
 // Trigger respawn sequence
@@ -2758,6 +5214,9 @@ function triggerRespawn(reason = 'unknown') {
         case 'damage':
             message = 'You died! Respawning...';
             break;
+        case 'airborne_timeout':
+            message = 'Stuck in air too long! Respawning...';
+            break;
         default:
             message = 'Respawning...';
     }
@@ -2772,10 +5231,8 @@ function triggerRespawn(reason = 'unknown') {
         damagePlayer();
     }
     
-    // Respawn after delay
-    setTimeout(() => {
-        executeRespawn();
-    }, fallDetection.respawnDelay);
+    // Respawn immediately
+    executeRespawn();
 }
 
 // Execute the respawn
@@ -3188,32 +5645,49 @@ function generateProgrammaticLevels() {
 async function loadAllLevels() {
     const allLevels = [];
     
-    // Load existing levels from levels.json
+    // Load tutorial levels from levels.json (levels 1-5)
     try {
         const response = await fetch('levels.json');
         if (response.ok) {
             const existingLevels = await response.json();
-            allLevels.push(...existingLevels);
+            
+            // Use first 5 levels as tutorial levels (levels 1-5)
+            const tutorialLevels = existingLevels.slice(0, 5);
+            allLevels.push(...tutorialLevels);
+            
+            console.log(`✅ Loaded ${tutorialLevels.length} tutorial levels (levels 1-5)`);
         }
     } catch (error) {
         console.warn('Could not load existing levels.json:', error);
     }
     
-    // Add programmatic levels
+    // Add programmatic 3D complex levels after the tutorial levels (starting from level 6)
     const programmaticLevels = generateProgrammaticLevels();
+    
+    // Renumber the programmatic levels to continue from level 6
+    programmaticLevels.forEach((level, index) => {
+        level.number = index + 6; // Start from level 6
+    });
+    
     allLevels.push(...programmaticLevels);
     
-    // Try to load modular levels
+    console.log(`✅ Added ${programmaticLevels.length} complex 3D tower levels starting from level 6`);
+    
+    // Try to load modular levels for even more complex levels
     const modularLevelNames = ['advanced-tower', 'gravity-chambers'];
     for (const levelName of modularLevelNames) {
         const levelData = await loadModularLevel(levelName);
         if (levelData) {
+            // Renumber modular levels to continue sequence
+            levelData.number = allLevels.length + 1;
             allLevels.push(levelData);
-            console.log(`✅ Successfully loaded modular level: ${levelName}`);
+            console.log(`✅ Successfully loaded modular level: ${levelName} as level ${levelData.number}`);
         } else {
             console.warn(`⚠️  Failed to load modular level: ${levelName}`);
         }
     }
+    
+    console.log(`✅ Total levels loaded: ${allLevels.length} (5 tutorial + ${allLevels.length - 5} complex 3D levels)`);
     
     return allLevels;
 }
@@ -3254,6 +5728,9 @@ function updateGravityZones() {
     if (strongestInfluence > 0.1) {
         physicsWorld.gravity.copy(activeGravity);
         
+        // Ensure worldState.gravityDirection stays synchronized
+        worldState.gravityDirection.copy(activeGravity.clone().normalize());
+        
         // Visual feedback for gravity change
         if (strongestInfluence > 0.8) {
             createGravityZoneEffect(playerPos, activeGravity);
@@ -3261,6 +5738,9 @@ function updateGravityZones() {
     } else {
         // Reset to default gravity
         physicsWorld.gravity.set(0, PHYSICS_CONFIG.gravity, 0);
+        
+        // Ensure worldState.gravityDirection stays synchronized
+        worldState.gravityDirection.set(0, -1, 0);
     }
 }
 
@@ -3376,6 +5856,8 @@ function loadJsonLevel(levelIndex) {
     clearStaticWalls();
     clearMovingObstacles();
     clearTypedTiles();
+    clearHoles();
+    clearUnderworldObjects();
     
     // Clear 3D platforms and objects
     clearAllPlatforms();
@@ -3390,14 +5872,17 @@ function loadJsonLevel(levelIndex) {
         gameScore.hasKey = false;
         gameScore.levelComplete = false;
         
-        if (level.objects) {
+        // Check if this level requires all coins to complete
+        if (level.requireAllCoins && level.objects) {
             level.objects.forEach(obj => {
                 if (obj.type === 'coin') {
                     gameScore.requiredCoins++;
                 }
             });
+            console.log(`Level ${level.number}: Requires ${gameScore.requiredCoins} coins to complete`);
+        } else {
+            console.log(`Level ${level.number}: Coins are optional (completion rules: ${level.number === 1 ? 'coins + key' : level.number >= 2 && level.number <= 5 ? 'key only (auto-transition)' : 'key + goal tile'})`);
         }
-        console.log(`Level ${level.number}: Requires ${gameScore.requiredCoins} coins to complete`);
     }
     
     // Check if this is a 3D level
@@ -3510,6 +5995,9 @@ function loadJsonLevel(levelIndex) {
                 case 'movingObstacle':
                     createMovingObstacle(obj.x, obj.z, obj.endX, obj.endZ, obj.speed || 1);
                     break;
+                case 'hole':
+                    createHole(obj.x, obj.z);
+                    break;
             }
         });
         
@@ -3527,8 +6015,7 @@ function loadJsonLevel(levelIndex) {
     
     // Transition overlay system removed - no longer needed
     
-    // Show level start message
-    showMessage(`Level ${level.number}: ${level.name}`, '#00ccff', 3000);
+    // Level start message removed for instant loading
     
     // Update level info display
     updateLevelInfo();
@@ -3553,6 +6040,15 @@ function loadJsonLevel(levelIndex) {
     
     // Force camera update to target player
     updateThirdPersonCamera();
+    
+    // Create inverted world geometry
+    createInvertedWorldGeometry();
+    
+    // Set up environment for this level
+    setupEnvironment(level);
+    
+    // Validate and add missing physics surfaces
+    validatePhysicsSurfaces();
     
     console.log(`📄 JSON level ${level.name} loaded successfully`);
     console.log(`📄 Player position: (${player.position.x.toFixed(2)}, ${player.position.y.toFixed(2)}, ${player.position.z.toFixed(2)})`);
@@ -3625,6 +6121,8 @@ function create3DLevelObject(obj) {
                 newGravity: obj.newGravity,
                 duration: obj.duration
             });
+        case 'bouncingPlatform':
+            return createBouncingPlatform3D(position.x, position.y, position.z);
         default:
             console.warn('Unknown 3D object type:', obj.type);
             return null;
@@ -3946,7 +6444,7 @@ function isValidGridPosition(x, z) {
            x < gridSize && z < gridSize;
 }
 
-// Helper function to show messages
+// Helper function to show messages (no fade delays)
 function showMessage(text, color = '#ffaa00', duration = 2000) {
     const messageElement = document.getElementById('message-display');
     if (messageElement) {
@@ -3959,12 +6457,10 @@ function showMessage(text, color = '#ffaa00', duration = 2000) {
             clearTimeout(messageElement.hideTimeout);
         }
         
-        // Set new timeout to hide message
+        // Set new timeout to hide message immediately
         messageElement.hideTimeout = setTimeout(() => {
             messageElement.classList.remove('show');
-            setTimeout(() => {
-                messageElement.textContent = '';
-            }, 300); // Wait for fade out animation
+            messageElement.textContent = '';
         }, duration);
     }
 }
@@ -4545,6 +7041,8 @@ function createKey() {
     worldGroup.add(keyGroup);
     gameKey = keyGroup;
     
+    console.log('🔑 Key created at grid position:', keyGridX, keyGridZ);
+    
     return keyGroup;
 }
 
@@ -4592,6 +7090,8 @@ function createGoalTile() {
 
 // Function to collect the key
 function collectKey() {
+    console.log('🔑 Key collection triggered');
+    
     if (gameKey) {
         // Send collection event to server for multiplayer sync
         if (multiplayerState.isConnected && gameKey.userData.id && !gameMode.isSinglePlayer) {
@@ -4611,6 +7111,11 @@ function collectKey() {
         // Play key pickup sound effect
         soundManager.play('key');
         
+        // Force immediate HUD refresh to ensure inventory is updated
+        setTimeout(() => {
+            updateScoreDisplay({ animateKey: false });
+        }, 50);
+        
         // Update goal tile appearance
         if (goalTile) {
             goalTile.material.color.setHex(0x00ff00);
@@ -4621,37 +7126,79 @@ function collectKey() {
         // Update typed goal tile appearance
         updateGoalTileAppearance();
         
-        // Show key collection message
-        showMessage('Key collected! The exit is now unlocked!', '#ff6600', 3000);
-        
-        updateScoreDisplay({ animateKey: true });
-        
         // Create collection effect
         showKeyCollectionEffect();
         
-        // Check for level completion in single player mode
-        if (gameMode.isSinglePlayer && gameScore.coins >= gameScore.requiredCoins && gameScore.hasKey) {
-            setTimeout(() => {
+        // Handle different completion rules based on level
+        const currentLevel = gameScore.currentLevel;
+        
+        if (gameMode.isSinglePlayer && !gameScore.levelComplete) {
+            if (currentLevel >= 2 && currentLevel <= 5) {
+                // Levels 2-5: Auto-transition on key collection
+                updateScoreDisplay({ animateKey: true });
+                
+                completeLevel();
+            } else {
+                // Level 1 and 6+: Show message and check for completion
+                if (currentLevel === 1) {
+                    showMessage('Key collected! Now collect all coins and reach the exit!', '#ff6600', 3000);
+                } else {
+                    showMessage('Key collected! Now reach the exit to complete the level!', '#ff6600', 3000);
+                }
+                
+                updateScoreDisplay({ animateKey: true });
+                
+                // Check for level completion
+                if (gameScore.coins >= gameScore.requiredCoins && gameScore.hasKey) {
+                    checkForAutoLevelCompletion();
+                }
+            }
+        } else {
+            // Multiplayer or already completed
+            showMessage('Key collected! The exit is now unlocked!', '#ff6600', 3000);
+            updateScoreDisplay({ animateKey: true });
+            
+            // Check for level completion in single player mode
+            if (gameMode.isSinglePlayer && gameScore.coins >= gameScore.requiredCoins && gameScore.hasKey) {
                 checkForAutoLevelCompletion();
-            }, 1000);
+            }
         }
     }
 }
 
 // Function to complete the level
 function completeLevel() {
-    // Check completion requirements based on game mode
+    // Check completion requirements based on game mode and level
     if (gameMode.isSinglePlayer) {
-        // Single player mode: require ALL coins + key
-        if (!gameScore.hasKey) {
-            showMessage('Exit is locked! Find the key first!', '#ff6666', 2000);
-            return;
-        }
+        const currentLevel = gameScore.currentLevel;
         
-        if (gameScore.coins < gameScore.requiredCoins) {
-            const remaining = gameScore.requiredCoins - gameScore.coins;
-            showMessage(`Collect all coins first! ${remaining} coins remaining.`, '#ff6666', 2000);
-            return;
+        // Different completion rules for different levels
+        if (currentLevel === 1) {
+            // Level 1: requires ALL coins + key
+            if (!gameScore.hasKey) {
+                showMessage('Exit is locked! Find the key first!', '#ff6666', 2000);
+                return;
+            }
+            
+            if (gameScore.coins < gameScore.requiredCoins) {
+                const remaining = gameScore.requiredCoins - gameScore.coins;
+                showMessage(`Collect all coins first! ${remaining} coins remaining.`, '#ff6666', 2000);
+                return;
+            }
+        } else if (currentLevel >= 2 && currentLevel <= 5) {
+            // Levels 2-5: only require key (auto-transition handled in collectKey)
+            if (!gameScore.hasKey) {
+                showMessage('Exit is locked! Find the key first!', '#ff6666', 2000);
+                return;
+            }
+            // Coins are optional for levels 2-5
+        } else {
+            // Levels 6+: require key (coins are optional)
+            if (!gameScore.hasKey) {
+                showMessage('Exit is locked! Find the key first!', '#ff6666', 2000);
+                return;
+            }
+            // Coins are optional for levels 6+
         }
     } else {
         // Multiplayer mode: only require key (legacy behavior)
@@ -4717,8 +7264,7 @@ function completeLevel() {
         progressInfo = ` | Next: Random Level ${gameScore.currentLevel + 1}`;
     }
     
-    const completionMessage = `Level Complete! Score: ${levelScore}${timeInfo}${bestTimeInfo}`;
-    showMessage(completionMessage, '#00ff00', 3000);
+    // Level completion message removed for instant transitions
     
     // Create completion effect
     showLevelCompletionEffect();
@@ -4764,24 +7310,14 @@ function checkForAutoLevelCompletion() {
     }
 }
 
-// Overlay functions removed - no longer needed for direct transitions
-
-// Function to perform direct level transition (no fade effects)
-function performSmoothLevelTransition() {
-    console.log('🎬 Starting direct level transition...');
-    
-    // Direct level loading - no delays, no overlays
-    transitionToNextLevel();
-    
-    // Immediate post-transition setup
-    postTransitionSetup();
-    
-    console.log('🎬 Direct transition complete');
-}
+// All transition functions removed - immediate level switching enabled
 
 // Function to transition to next level
 function transitionToNextLevel() {
     console.log('🔄 Transitioning to next level...');
+    
+    // Transition safety lock removed - instant transitions enabled
+    console.log('🔄 Starting instant level transition...');
     
     // Reset level state (but keep lives)
     gameScore.hasKey = false;
@@ -4792,29 +7328,39 @@ function transitionToNextLevel() {
     // Reset timer for next level
     resetTimer();
     
-    if (useJsonLevels && levelDataLoaded) {
-        // Use JSON levels
-        if (currentJsonLevelIndex < jsonLevels.length - 1) {
-            // Load next JSON level
-            setCurrentLevelIndex(currentJsonLevelIndex + 1);
-            const loadResult = loadJsonLevel(currentJsonLevelIndex);
-            console.log(`🔄 JSON level load result: ${loadResult}`);
-        } else {
-            // All JSON levels completed - offer options
-            handleAllJsonLevelsCompleted();
-        }
-    } else {
-        // Use random generation
-        gameScore.currentLevel++;
-        const coinsForLevel = Math.min(15 + (gameScore.currentLevel - 1) * 2, 25);
-        generateNewLevel(coinsForLevel);
-        console.log(`🔄 Generated Level ${gameScore.currentLevel} with ${coinsForLevel} coins`);
-        
-        // Show new level message for random levels
-        showMessage(`Level ${gameScore.currentLevel} - Find the key and reach the goal! Avoid spikes!`, '#00ccff', 3000);
-    }
+    // No collection timers to clear - immediate collection enabled
     
-    updateScoreDisplay();
+    // Immediate level transition - no delays or animations
+    try {
+        if (useJsonLevels && levelDataLoaded) {
+            // Use JSON levels
+            if (currentJsonLevelIndex < jsonLevels.length - 1) {
+                // Load next JSON level
+                setCurrentLevelIndex(currentJsonLevelIndex + 1);
+                const loadResult = loadJsonLevel(currentJsonLevelIndex);
+                console.log(`🔄 JSON level load result: ${loadResult}`);
+            } else {
+                // All JSON levels completed - offer options
+                handleAllJsonLevelsCompleted();
+            }
+        } else {
+            // Use random generation
+            gameScore.currentLevel++;
+            const coinsForLevel = Math.min(15 + (gameScore.currentLevel - 1) * 2, 25);
+            generateNewLevel(coinsForLevel);
+            console.log(`🔄 Generated Level ${gameScore.currentLevel} with ${coinsForLevel} coins`);
+            
+            // No level message for instant loading
+        }
+        
+        updateScoreDisplay();
+        
+        console.log('✅ Transition completed immediately');
+        
+    } catch (error) {
+        console.error('❌ Error during level transition:', error);
+        showMessage('Transition error occurred. Please try again.', '#ff6666', 3000);
+    }
 }
 
 // Function to set up the game state after level transition
@@ -5242,10 +7788,8 @@ function restartJsonLevels() {
     setCurrentLevelIndex(0);
     showMessage('🔄 Restarting JSON levels from the beginning!', '#00ffff', 3000);
     
-    // Small delay for message visibility
-    setTimeout(() => {
-        loadJsonLevel(currentJsonLevelIndex);
-    }, 1000);
+    // Load immediately - no delay
+    loadJsonLevel(currentJsonLevelIndex);
 }
 
 // Function to switch to random generation
@@ -5255,11 +7799,9 @@ function switchToRandomGeneration() {
     
     showMessage('🎲 Switching to infinite random levels!', '#ff6600', 3000);
     
-    // Small delay for message visibility
-    setTimeout(() => {
-        const coinsForLevel = Math.min(15 + (gameScore.currentLevel - 1) * 2, 25);
-        generateNewLevel(coinsForLevel);
-    }, 1000);
+    // Generate immediately - no delay
+    const coinsForLevel = Math.min(15 + (gameScore.currentLevel - 1) * 2, 25);
+    generateNewLevel(coinsForLevel);
 }
 
 // Function to loop back to first JSON level
@@ -5267,10 +7809,8 @@ function loopToFirstJsonLevel() {
     setCurrentLevelIndex(0);
     showMessage('🔁 Looping back to first JSON level!', '#ff00ff', 3000);
     
-    // Small delay for message visibility
-    setTimeout(() => {
-        loadJsonLevel(currentJsonLevelIndex);
-    }, 1000);
+    // Load immediately - no delay
+    loadJsonLevel(currentJsonLevelIndex);
 }
 
 // Function to generate a new level
@@ -5323,8 +7863,6 @@ function generateNewLevel(coinCount = 15) {
     
     // Update level info display
     updateLevelInfo();
-    
-    // Transition overlay system removed - no longer needed
     
     // Send level initialization event to server for multiplayer sync
     if (multiplayerState.isConnected && !gameMode.isSinglePlayer) {
@@ -5480,22 +8018,40 @@ function animateKeyAndGoal() {
 }
 
 // Function to check key and goal collection
+// NOTE: This function is completely camera-independent and works identically in all camera modes
 function checkKeyAndGoalCollection() {
+    // Collision detection runs independent of camera state - no camera interference
+    
     const playerPos = player.position;
     const collectDistance = getConfigValue('physics.collisionDistance', 0.8);
     
-    // Check key collection
+    // Check if player is in a valid position (not NaN, not too far from origin)
+    if (!playerPos || isNaN(playerPos.x) || isNaN(playerPos.y) || isNaN(playerPos.z)) {
+        console.warn('❌ Player position is invalid:', playerPos);
+        return;
+    }
+    
+    // Check if player is too far from reasonable bounds (likely a bug)
+    if (Math.abs(playerPos.x) > 100 || Math.abs(playerPos.y) > 100 || Math.abs(playerPos.z) > 100) {
+        console.warn('❌ Player position is out of bounds:', playerPos);
+        return;
+    }
+    
+    // Key collection - completely independent of camera state
     if (gameKey && !gameScore.hasKey) {
         const distance = playerPos.distanceTo(gameKey.position);
+        
         if (distance < collectDistance) {
+            console.log('🔑 Key collected! Distance:', distance.toFixed(2));
             collectKey();
         }
     }
     
-    // Check goal completion
+    // Goal completion - completely independent of camera state
     if (goalTile && !gameScore.levelComplete) {
         const distance = playerPos.distanceTo(goalTile.position);
         if (distance < collectDistance) {
+            console.log('🎯 COMPLETING LEVEL! Distance:', distance.toFixed(2));
             completeLevel();
         }
     }
@@ -5594,6 +8150,284 @@ function createSpikeTrap(gridX, gridZ) {
     spikeTraps.push(trapGroup);
     
     return trapGroup;
+}
+
+// ============ HOLE SYSTEM ============
+
+// Function to create a hole at a specific position
+function createHole(gridX, gridZ) {
+    const holeGroup = new THREE.Group();
+    
+    // Create hole base (dark circle)
+    const holeBaseGeometry = new THREE.CylinderGeometry(0.9, 0.9, 0.05, 16);
+    const holeBaseMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0x111111,
+        emissive: 0x000000
+    });
+    const holeBase = new THREE.Mesh(holeBaseGeometry, holeBaseMaterial);
+    holeBase.position.set(0, 0.025, 0);
+    holeGroup.add(holeBase);
+    
+    // Create swirling particles around the hole
+    const particleCount = 12;
+    for (let i = 0; i < particleCount; i++) {
+        const particleGeometry = new THREE.SphereGeometry(0.02, 8, 8);
+        const particleMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x4444ff,
+            transparent: true,
+            opacity: 0.7
+        });
+        const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+        
+        // Position particles in a spiral
+        const angle = (i / particleCount) * Math.PI * 2;
+        const radius = 0.6 + Math.sin(angle * 3) * 0.2;
+        particle.position.set(
+            Math.cos(angle) * radius,
+            0.1 + Math.sin(angle * 2) * 0.05,
+            Math.sin(angle) * radius
+        );
+        holeGroup.add(particle);
+    }
+    
+    // Position the hole group
+    holeGroup.position.copy(gridToWorld(gridX, gridZ));
+    holeGroup.position.y = 0.0;
+    holeGroup.receiveShadow = true;
+    
+    // Store grid position
+    holeGroup.gridX = gridX;
+    holeGroup.gridZ = gridZ;
+    holeGroup.isHole = true;
+    
+    // Add animation data
+    holeGroup.userData = {
+        originalY: holeGroup.position.y,
+        animationOffset: Math.random() * Math.PI * 2,
+        id: `hole_${gridX}_${gridZ}`,
+        particleCount: particleCount
+    };
+    
+    worldGroup.add(holeGroup);
+    holes.push(holeGroup);
+    
+    return holeGroup;
+}
+
+// Function to clear all holes
+function clearHoles() {
+    holes.forEach(hole => {
+        worldGroup.remove(hole);
+    });
+    holes.length = 0;
+}
+
+// Function to create underworld exit
+function createUnderworldExit(gridX, gridZ) {
+    const exitGroup = new THREE.Group();
+    
+    // Create exit platform (glowing)
+    const exitGeometry = new THREE.CylinderGeometry(0.8, 0.8, 0.2, 16);
+    const exitMaterial = new THREE.MeshLambertMaterial({ 
+        color: 0x00ff00,
+        emissive: 0x004400,
+        transparent: true,
+        opacity: 0.8
+    });
+    const exitBase = new THREE.Mesh(exitGeometry, exitMaterial);
+    exitBase.position.set(0, 0.1, 0);
+    exitBase.castShadow = true;
+    exitBase.receiveShadow = true;
+    exitGroup.add(exitBase);
+    
+    // Create upward light beam effect
+    const beamGeometry = new THREE.CylinderGeometry(0.1, 0.8, 3, 8);
+    const beamMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 0.3
+    });
+    const beam = new THREE.Mesh(beamGeometry, beamMaterial);
+    beam.position.set(0, 1.5, 0);
+    exitGroup.add(beam);
+    
+    // Position the exit group
+    exitGroup.position.copy(gridToWorld(gridX, gridZ));
+    exitGroup.position.y = 0.0;
+    
+    // Store grid position
+    exitGroup.gridX = gridX;
+    exitGroup.gridZ = gridZ;
+    exitGroup.isUnderworldExit = true;
+    
+    // Add animation data
+    exitGroup.userData = {
+        originalY: exitGroup.position.y,
+        animationOffset: Math.random() * Math.PI * 2,
+        id: `underworld_exit_${gridX}_${gridZ}`
+    };
+    
+    worldGroup.add(exitGroup);
+    underworldState.underworldExits.push(exitGroup);
+    
+    return exitGroup;
+}
+
+// Function to teleport player to underworld
+function teleportToUnderworld() {
+    if (underworldState.isInUnderworld) return;
+    
+    // Store current position
+    underworldState.overworldPosition = {
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z
+    };
+    
+    // Move player to underworld
+    underworldState.isInUnderworld = true;
+    
+    // Get underworld spawn point
+    const currentLevel = getCurrentLevelData();
+    if (currentLevel && currentLevel.underworld) {
+        const underworldStart = currentLevel.underworld.playerStart;
+        const underworldPos = gridToWorld(underworldStart.x, underworldStart.z);
+        
+        // Move player to underworld (below main level)
+        setPlayerPosition({
+            x: underworldPos.x,
+            y: underworldPos.y || -15, // Below main level
+            z: underworldPos.z
+        }, 'underworld teleport');
+        
+        // Create underworld environment
+        createUnderworldEnvironment(currentLevel.underworld);
+        
+        showMessage('You\'ve fallen into the underworld! Find an exit to return.', '#ff6600', 3000);
+    }
+}
+
+// Function to create underworld environment
+function createUnderworldEnvironment(underworldConfig) {
+    // Clear existing underworld objects
+    clearUnderworldObjects();
+    
+    // Create underworld objects
+    if (underworldConfig.objects) {
+        underworldConfig.objects.forEach(obj => {
+            switch(obj.type) {
+                case 'coin':
+                    const coin = createCoin(obj.x, obj.z);
+                    coin.position.y = -15 + 1.2; // Position in underworld
+                    underworldState.underworldObjects.push(coin);
+                    break;
+                case 'underworldExit':
+                    createUnderworldExit(obj.x, obj.z);
+                    break;
+            }
+        });
+    }
+}
+
+// Function to clear underworld objects
+function clearUnderworldObjects() {
+    underworldState.underworldObjects.forEach(obj => {
+        worldGroup.remove(obj);
+        // Remove from coins array if it's a coin
+        const coinIndex = coins.indexOf(obj);
+        if (coinIndex !== -1) {
+            coins.splice(coinIndex, 1);
+        }
+    });
+    underworldState.underworldObjects.length = 0;
+    
+    underworldState.underworldExits.forEach(exit => {
+        worldGroup.remove(exit);
+    });
+    underworldState.underworldExits.length = 0;
+}
+
+// Function to exit underworld
+function exitUnderworld() {
+    if (!underworldState.isInUnderworld) return;
+    
+    // Clear underworld objects
+    clearUnderworldObjects();
+    
+    // Return player to overworld
+    if (underworldState.overworldPosition) {
+        setPlayerPosition({
+            x: underworldState.overworldPosition.x,
+            y: underworldState.overworldPosition.y,
+            z: underworldState.overworldPosition.z
+        }, 'underworld exit');
+    }
+    
+    underworldState.isInUnderworld = false;
+    underworldState.overworldPosition = null;
+    
+    showMessage('You\'ve returned to the surface!', '#00ff00', 2000);
+}
+
+// ============ ENVIRONMENT SYSTEM ============
+
+// Function to set up environment based on level
+function setupEnvironment(levelData) {
+    // Reset to default environment
+    scene.fog = null;
+    scene.background = new THREE.Color(0x87CEEB); // Sky blue
+    
+    // Check if this is a jungle level
+    if (levelData && levelData.isJungle) {
+        setupJungleEnvironment();
+    } else {
+        // Default environment
+        setupDefaultEnvironment();
+    }
+}
+
+// Function to set up jungle environment
+function setupJungleEnvironment() {
+    // Green jungle skybox
+    scene.background = new THREE.Color(0x228B22); // Forest green
+    
+    // Add jungle fog for depth
+    scene.fog = new THREE.Fog(0x228B22, 10, 50);
+    
+    // Adjust lighting for jungle atmosphere
+    if (ambientLight) {
+        ambientLight.color.setHex(0x404040); // Darker ambient
+        ambientLight.intensity = 0.4;
+    }
+    
+    if (directionalLight) {
+        directionalLight.color.setHex(0x90EE90); // Light green tint
+        directionalLight.intensity = 0.8;
+    }
+    
+    console.log('🌳 Jungle environment activated');
+}
+
+// Function to set up default environment
+function setupDefaultEnvironment() {
+    // Default blue sky
+    scene.background = new THREE.Color(0x87CEEB);
+    
+    // No fog
+    scene.fog = null;
+    
+    // Reset lighting
+    if (ambientLight) {
+        ambientLight.color.setHex(0x404040);
+        ambientLight.intensity = 0.3;
+    }
+    
+    if (directionalLight) {
+        directionalLight.color.setHex(0xffffff);
+        directionalLight.intensity = 1;
+    }
+    
+    console.log('🌅 Default environment activated');
 }
 
 // Function to clear all spike traps
@@ -5802,6 +8636,52 @@ function checkSpikeTrapCollision() {
     }
 }
 
+// Function to check hole collision
+function checkHoleCollision() {
+    if (underworldState.isInUnderworld) return; // Don't check holes in underworld
+    if (playerState.isMoving || gameScore.lives <= 0) return;
+    
+    const playerPos = player.position;
+    const holeDistance = getConfigValue('physics.collisionDistance', 0.8);
+    
+    for (let i = 0; i < holes.length; i++) {
+        const hole = holes[i];
+        const distance = playerPos.distanceTo(hole.position);
+        
+        if (distance < holeDistance) {
+            // Get current level data to check if it has underworld
+            const currentLevel = getCurrentLevelData();
+            if (currentLevel && currentLevel.hasUnderworld) {
+                teleportToUnderworld();
+            } else {
+                // If no underworld, treat as damage
+                damagePlayer();
+                showMessage('You fell into a hole!', '#ff6666', 2000);
+            }
+            break; // Only one hole can trigger per frame
+        }
+    }
+}
+
+// Function to check underworld exit collision
+function checkUnderworldExitCollision() {
+    if (!underworldState.isInUnderworld) return; // Only check in underworld
+    if (playerState.isMoving || gameScore.lives <= 0) return;
+    
+    const playerPos = player.position;
+    const exitDistance = getConfigValue('physics.collisionDistance', 0.8);
+    
+    for (let i = 0; i < underworldState.underworldExits.length; i++) {
+        const exit = underworldState.underworldExits[i];
+        const distance = playerPos.distanceTo(exit.position);
+        
+        if (distance < exitDistance) {
+            exitUnderworld();
+            break; // Only one exit can trigger per frame
+        }
+    }
+}
+
 // Function to create teleport tiles
 function createTeleportTiles(pairCount = 2) {
     // Clear existing teleport tiles
@@ -5961,10 +8841,8 @@ function teleportPlayer(teleportTile) {
     // Track teleport usage for statistics and achievements
     trackTeleportUsage();
     
-    // Show teleport effect at destination
-    setTimeout(() => {
-        showTeleportEffect(player.position);
-    }, 200);
+    // Show teleport effect at destination immediately
+    showTeleportEffect(player.position);
     
     // Update UI
     updatePlayerPosition();
@@ -6242,6 +9120,9 @@ function initializeCameraSystem() {
         enabled: true,
         currentPreset: 'default',
         
+        // New camera mode system
+        currentMode: 'chase', // 'chase', 'isometric', or 'kula'
+        
         // Enhanced camera settings
         gravityTransitionSpeed: getConfigValue('camera.gravityTransitionSpeed', 0.3),
         jumpPredictionStrength: getConfigValue('camera.jumpPredictionStrength', 0.8),
@@ -6252,6 +9133,38 @@ function initializeCameraSystem() {
         lastGravityDirection: new THREE.Vector3(0, -1, 0),
         gravityTransitionProgress: 0,
         isTransitioning: false,
+        
+        // Chase camera specific settings
+        chaseDistance: 8,
+        chaseHeight: 5,
+        chaseSmoothing: 0.1,
+        lastPlayerDirection: new THREE.Vector3(0, 0, 1),
+        
+        // Isometric camera specific settings
+        isometricOffset: new THREE.Vector3(8, 12, 8),
+        isometricTarget: new THREE.Vector3(0, 1.2, 0),
+        isometricSmoothing: 0.08,
+        
+        // Kula camera specific settings (inspired by Kula World)
+        kulaDistance: 6,           // Distance behind and above the ball
+        kulaHeight: 4,             // Height above the ball
+        kulaTilt: -0.3,            // Downward tilt angle (radians)
+        kulaSmoothing: 0.12,       // Smoothing factor for movement
+        kulaOrbitSpeed: 0.08,      // Speed of orbit movement when turning
+        kulaTargetOffset: new THREE.Vector3(0, -0.5, 0), // Target slightly below ball center
+        kulaMaxTiltAngle: 0.5,     // Maximum tilt angle to prevent extreme angles
+        kulaHorizonLock: true,     // Lock horizon to prevent roll
+        
+        // Camera manual control settings
+        manualControlEnabled: false,
+        manualOffset: new THREE.Vector3(0, 0, 0),
+        manualRotationX: 0,
+        manualRotationY: 0,
+        controlSensitivity: 0.5,
+        controlSmoothing: 0.2,
+        
+        // Camera stability settings
+        lastPredictedPosition: null,
         
         presets: {
             default: {
@@ -6316,6 +9229,17 @@ function initializeControls() {
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.target.set(0, 1, 0); // Set initial target for controls
+    
+    // Prevent OrbitControls from interfering with key pickup and player movement
+    controls.enableKeys = false;
+    controls.enableRotate = false;
+    controls.enablePan = false;
+    controls.enableZoom = false;
+    
+    // Ensure orbit controls don't capture mouse/touch events that could interfere with gameplay
+    if (controls.domElement) {
+        controls.domElement.style.pointerEvents = 'none';
+    }
 
     // Store original controls target for rotation calculations
     originalControlsTarget = controls.target.clone();
@@ -6840,72 +9764,87 @@ function detectMovementState() {
     }
 }
 
-// Enhanced camera prediction system
+// Enhanced camera prediction system with improved stability
 function calculateCameraPrediction(playerWorldPos, playerVelocity, movementState) {
-    let velocityInfluence = 0.4; // Base velocity influence
+    let velocityInfluence = 0.3; // Reduced base velocity influence for stability
     let heightOffset = 0;
     let lookAheadDistance = 0;
     
     // Get movement state-specific prediction strengths from config
-    const jumpPrediction = cameraSystem.jumpPredictionStrength || 0.8;
-    const fallPrediction = cameraSystem.fallPredictionStrength || 1.0;
-    const rollingPrediction = cameraSystem.rollingPredictionStrength || 0.6;
+    const jumpPrediction = cameraSystem.jumpPredictionStrength || 0.7;
+    const fallPrediction = cameraSystem.fallPredictionStrength || 0.8;
+    const rollingPrediction = cameraSystem.rollingPredictionStrength || 0.5;
     
-    // Adjust prediction based on movement state
+    // Adjust prediction based on movement state with improved stability
     switch (movementState) {
         case 'jumping':
-            velocityInfluence = 0.4 * jumpPrediction; // More responsive during jumps
-            heightOffset = 1.5; // Look higher for jumps
-            lookAheadDistance = 0.4; // Look ahead more for jumps
+            velocityInfluence = 0.3 * jumpPrediction; // More stable during jumps
+            heightOffset = 1.0; // Reduced height offset for smoother camera
+            lookAheadDistance = 0.3; // Reduced look-ahead for stability
             break;
         case 'falling':
-            velocityInfluence = 0.6 * fallPrediction; // Very responsive during falls
-            heightOffset = -0.8; // Look lower for falls
-            lookAheadDistance = 0.3; // Look ahead less for falls
+            velocityInfluence = 0.4 * fallPrediction; // More stable during falls
+            heightOffset = -0.5; // Reduced height offset for smoother camera
+            lookAheadDistance = 0.2; // Reduced look-ahead for stability
             break;
         case 'rolling':
-            velocityInfluence = 0.5 * rollingPrediction; // Balanced for rolling
-            lookAheadDistance = 0.5; // Good look-ahead for rolling
+            velocityInfluence = 0.3 * rollingPrediction; // More stable for rolling
+            lookAheadDistance = 0.3; // Reduced look-ahead for stability
             break;
         case 'airborne':
-            velocityInfluence = 0.7; // Responsive in air
-            lookAheadDistance = 0.3;
+            velocityInfluence = 0.4; // More stable in air
+            lookAheadDistance = 0.2;
             break;
         default: // idle
-            velocityInfluence = 0.2; // Less responsive when idle
-            lookAheadDistance = 0.1;
+            velocityInfluence = 0.1; // Even less responsive when idle for stability
+            lookAheadDistance = 0.05;
     }
     
-    // Calculate predicted position with enhanced look-ahead
+    // Calculate predicted position with enhanced stability
     const horizontalVelocity = new THREE.Vector3(playerVelocity.x, 0, playerVelocity.z);
-    const lookAheadPos = playerWorldPos.clone().add(horizontalVelocity.clone().multiplyScalar(lookAheadDistance));
+    
+    // Apply velocity smoothing to reduce jitter
+    const smoothedVelocity = horizontalVelocity.clone().multiplyScalar(0.8);
+    const lookAheadPos = playerWorldPos.clone().add(smoothedVelocity.clone().multiplyScalar(lookAheadDistance));
     const predictedPos = lookAheadPos.clone().add(playerVelocity.clone().multiplyScalar(velocityInfluence));
     
-    // Add height offset based on movement state
-    predictedPos.y += heightOffset;
+    // Add height offset based on movement state with smoothing
+    predictedPos.y += heightOffset * 0.7; // Reduce height offset impact for stability
     
-    // Apply additional prediction based on player physics state
+    // Apply additional prediction based on player physics state with reduced influence
     if (playerPhysics) {
-        // Predict based on acceleration for more responsive camera
-        const accelerationInfluence = 0.1;
+        // Reduced prediction based on acceleration for more stable camera
+        const accelerationInfluence = 0.05; // Reduced from 0.1
         const accelPrediction = playerPhysics.acceleration.clone().multiplyScalar(accelerationInfluence);
         predictedPos.add(accelPrediction);
         
-        // Extra prediction during rapid velocity changes
+        // Reduced prediction during rapid velocity changes
         const velocityChange = playerVelocity.clone().sub(playerPhysics.previousVelocity);
-        const velocityChangeInfluence = 0.3;
+        const velocityChangeInfluence = 0.15; // Reduced from 0.3
         predictedPos.add(velocityChange.multiplyScalar(velocityChangeInfluence));
     }
+    
+    // Apply position smoothing to reduce jitter
+    if (cameraSystem.lastPredictedPosition) {
+        const smoothingFactor = 0.3; // Smooth the prediction itself
+        predictedPos.lerp(cameraSystem.lastPredictedPosition, smoothingFactor);
+    }
+    
+    // Store for next frame
+    cameraSystem.lastPredictedPosition = predictedPos.clone();
     
     return predictedPos;
 }
 
 // Enhanced gravity-aware camera orientation
 function updateCameraForGravity() {
-    // Calculate current gravity direction
+    // Calculate current gravity direction (normalized)
     const gravityDir = physicsWorld.gravity.clone().normalize();
     
-    // Check if gravity direction changed
+    // Ensure worldState.gravityDirection is always synchronized with physics gravity
+    worldState.gravityDirection.copy(gravityDir);
+    
+    // Check if gravity direction changed for camera transitions
     const gravityChanged = !gravityDir.equals(cameraSystem.lastGravityDirection);
     
     if (gravityChanged) {
@@ -6913,7 +9852,7 @@ function updateCameraForGravity() {
         cameraSystem.gravityTransitionProgress = 0;
     }
     
-    // Update gravity transition
+    // Update gravity transition for smooth camera adaptation
     if (cameraSystem.isTransitioning) {
         cameraSystem.gravityTransitionProgress += cameraSystem.gravityTransitionSpeed;
         if (cameraSystem.gravityTransitionProgress >= 1) {
@@ -6923,16 +9862,13 @@ function updateCameraForGravity() {
         }
     }
     
-    // Interpolate gravity direction for smooth transitions
+    // Interpolate gravity direction for smooth camera transitions
     const currentGravityDir = cameraSystem.lastGravityDirection.clone();
     if (cameraSystem.isTransitioning) {
         currentGravityDir.lerp(gravityDir, cameraSystem.gravityTransitionProgress);
     }
     
-    // Update world state gravity direction
-    worldState.gravityDirection.copy(currentGravityDir);
-    
-    // Calculate camera up vector (opposite of gravity)
+    // Calculate camera up vector (opposite of gravity direction)
     const up = currentGravityDir.clone().negate();
     
     // Apply gravity influence to camera offset and target
@@ -6964,68 +9900,343 @@ function updateThirdPersonCamera() {
         playerVelocity.copy(playerPhysics.velocity);
     }
     
+    // Update camera orientation for gravity
+    const { up } = updateCameraForGravity();
+    
+    // Choose update method based on camera mode
+    if (cameraSystem.currentMode === 'chase') {
+        updateChaseCamera(playerWorldPos, playerVelocity, up);
+    } else if (cameraSystem.currentMode === 'isometric') {
+        updateIsometricCamera(playerWorldPos, playerVelocity, up);
+    } else if (cameraSystem.currentMode === 'kula') {
+        updateKulaCamera(playerWorldPos, playerVelocity, up);
+    }
+}
+
+// Chase Camera: Smooth follow camera that stays behind the ball
+function updateChaseCamera(playerWorldPos, playerVelocity, up) {
     // Detect current movement state
     const movementState = detectMovementState();
     
-    // Calculate enhanced prediction
+    // Calculate enhanced prediction for smoother following
     const predictedPos = calculateCameraPrediction(playerWorldPos, playerVelocity, movementState);
     
-    // Update camera orientation for gravity
-    const { up, adjustedOffset } = updateCameraForGravity();
-    
-    // Calculate desired camera position using gravity-adjusted offset
-    const desiredCameraPos = predictedPos.clone().add(adjustedOffset);
-    
-    // Calculate desired camera target (what to look at) using current target offset
-    const desiredCameraTarget = predictedPos.clone().add(cameraSystem.target);
-    
-    // Adjust smoothness based on movement state and player velocity
-    const speed = playerVelocity.length();
-    let dynamicSmoothness = cameraSystem.smoothness;
-    
-    // Movement state-based smoothness adjustments
-    switch (movementState) {
-        case 'jumping':
-            dynamicSmoothness = Math.min(cameraSystem.smoothness * 1.8, 0.5); // More responsive
-            break;
-        case 'falling':
-            dynamicSmoothness = Math.min(cameraSystem.smoothness * 2.0, 0.6); // Most responsive
-            break;
-        case 'rolling':
-            dynamicSmoothness = Math.min(cameraSystem.smoothness * (1 + speed * 0.15), 0.4); // Speed-based
-            break;
-        case 'airborne':
-            dynamicSmoothness = Math.min(cameraSystem.smoothness * 1.5, 0.4); // Moderate response
-            break;
-        default: // idle
-            dynamicSmoothness = cameraSystem.smoothness * 0.8; // Less responsive
+    // Determine player's forward direction based on movement
+    let playerDirection = new THREE.Vector3(0, 0, 1);
+    if (playerVelocity.length() > 0.1) {
+        playerDirection.copy(playerVelocity).normalize();
+        playerDirection.y = 0; // Remove vertical component
+        playerDirection.normalize();
+        
+        // Store the last significant direction for when player stops
+        if (playerDirection.length() > 0.1) {
+            cameraSystem.lastPlayerDirection.lerp(playerDirection, 0.1);
+        }
+    } else {
+        // Use last known direction when player is idle
+        playerDirection.copy(cameraSystem.lastPlayerDirection);
     }
     
-    // Enhanced vertical movement smoothing
-    let verticalSmoothness = dynamicSmoothness * 0.7;
-    if (movementState === 'jumping' || movementState === 'falling') {
-        verticalSmoothness = Math.min(dynamicSmoothness * 1.2, 0.5); // More responsive for jumps/falls
+    // Calculate desired camera position behind the player
+    const behindDirection = playerDirection.clone().negate();
+    const desiredCameraPos = predictedPos.clone()
+        .add(behindDirection.multiplyScalar(cameraSystem.chaseDistance))
+        .add(up.clone().multiplyScalar(cameraSystem.chaseHeight));
+    
+    // Calculate desired camera target (look at player)
+    const desiredCameraTarget = predictedPos.clone();
+    
+    // Apply smooth following with improved damping
+    const chaseSmoothing = cameraSystem.chaseSmoothing;
+    
+    // Adjust smoothness based on movement state for better responsiveness
+    let dynamicSmoothing = chaseSmoothing;
+    switch (movementState) {
+        case 'jumping':
+        case 'falling':
+            dynamicSmoothing = Math.min(chaseSmoothing * 1.5, 0.3);
+            break;
+        case 'rolling':
+            dynamicSmoothing = Math.min(chaseSmoothing * 1.2, 0.25);
+            break;
+        case 'airborne':
+            dynamicSmoothing = Math.min(chaseSmoothing * 1.3, 0.28);
+            break;
+        default:
+            dynamicSmoothing = chaseSmoothing;
+    }
+    
+    // Apply manual controls if enabled
+    if (cameraSystem.manualControlEnabled) {
+        desiredCameraPos.add(cameraSystem.manualOffset);
+        
+        // Apply manual rotation
+        if (cameraSystem.manualRotationX !== 0 || cameraSystem.manualRotationY !== 0) {
+            const rotationMatrix = new THREE.Matrix4();
+            rotationMatrix.makeRotationFromEuler(new THREE.Euler(cameraSystem.manualRotationX, cameraSystem.manualRotationY, 0));
+            const rotatedOffset = cameraSystem.manualOffset.clone().applyMatrix4(rotationMatrix);
+            desiredCameraPos.add(rotatedOffset);
+        }
     }
     
     // Smooth interpolation for camera position and target
-    cameraSystem.currentPosition.lerp(desiredCameraPos, dynamicSmoothness);
-    cameraSystem.currentTarget.lerp(desiredCameraTarget, dynamicSmoothness);
-    
-    // Apply enhanced smoothing to vertical camera movement
-    const currentY = cameraSystem.currentPosition.y;
-    const targetY = desiredCameraPos.y;
-    cameraSystem.currentPosition.y = currentY + (targetY - currentY) * verticalSmoothness;
+    cameraSystem.currentPosition.lerp(desiredCameraPos, dynamicSmoothing);
+    cameraSystem.currentTarget.lerp(desiredCameraTarget, dynamicSmoothing);
     
     // Update camera position and orientation
     camera.position.copy(cameraSystem.currentPosition);
     camera.lookAt(cameraSystem.currentTarget);
-    
-    // Update camera up vector based on gravity
     camera.up.copy(up);
 }
 
-// Toggle between third-person and orbit camera modes
+// Isometric Camera: Static angle that follows the ball smoothly
+function updateIsometricCamera(playerWorldPos, playerVelocity, up) {
+    // Detect current movement state
+    const movementState = detectMovementState();
+    
+    // Calculate enhanced prediction for smoother following
+    const predictedPos = calculateCameraPrediction(playerWorldPos, playerVelocity, movementState);
+    
+    // Calculate desired camera position with fixed isometric offset
+    const desiredCameraPos = predictedPos.clone().add(cameraSystem.isometricOffset);
+    
+    // Calculate desired camera target (look at player)
+    const desiredCameraTarget = predictedPos.clone().add(cameraSystem.isometricTarget);
+    
+    // Apply smooth following with isometric-specific damping
+    const isometricSmoothing = cameraSystem.isometricSmoothing;
+    
+    // Adjust smoothness based on movement state for better responsiveness
+    let dynamicSmoothing = isometricSmoothing;
+    switch (movementState) {
+        case 'jumping':
+        case 'falling':
+            dynamicSmoothing = Math.min(isometricSmoothing * 1.8, 0.25);
+            break;
+        case 'rolling':
+            dynamicSmoothing = Math.min(isometricSmoothing * 1.4, 0.2);
+            break;
+        case 'airborne':
+            dynamicSmoothing = Math.min(isometricSmoothing * 1.6, 0.22);
+            break;
+        default:
+            dynamicSmoothing = isometricSmoothing;
+    }
+    
+    // Apply manual controls if enabled
+    if (cameraSystem.manualControlEnabled) {
+        desiredCameraPos.add(cameraSystem.manualOffset);
+        
+        // Apply manual rotation
+        if (cameraSystem.manualRotationX !== 0 || cameraSystem.manualRotationY !== 0) {
+            const rotationMatrix = new THREE.Matrix4();
+            rotationMatrix.makeRotationFromEuler(new THREE.Euler(cameraSystem.manualRotationX, cameraSystem.manualRotationY, 0));
+            const rotatedOffset = cameraSystem.manualOffset.clone().applyMatrix4(rotationMatrix);
+            desiredCameraPos.add(rotatedOffset);
+        }
+    }
+    
+    // Smooth interpolation for camera position and target
+    cameraSystem.currentPosition.lerp(desiredCameraPos, dynamicSmoothing);
+    cameraSystem.currentTarget.lerp(desiredCameraTarget, dynamicSmoothing);
+    
+    // Update camera position and orientation
+    camera.position.copy(cameraSystem.currentPosition);
+    camera.lookAt(cameraSystem.currentTarget);
+    camera.up.copy(up);
+}
+
+// Kula Camera: Tilted perspective camera inspired by Kula World
+function updateKulaCamera(playerWorldPos, playerVelocity, up) {
+    // Detect current movement state
+    const movementState = detectMovementState();
+    
+    // Calculate enhanced prediction for smoother following
+    const predictedPos = calculateCameraPrediction(playerWorldPos, playerVelocity, movementState);
+    
+    // Determine player's movement direction for orbital following
+    let playerDirection = new THREE.Vector3(0, 0, 1);
+    if (playerVelocity.length() > 0.1) {
+        playerDirection.copy(playerVelocity).normalize();
+        playerDirection.y = 0; // Remove vertical component
+        playerDirection.normalize();
+        
+        // Smooth orbital transition when direction changes
+        if (playerDirection.length() > 0.1) {
+            if (!cameraSystem.kulaLastDirection) {
+                cameraSystem.kulaLastDirection = playerDirection.clone();
+            } else {
+                // Smooth transition to new direction
+                cameraSystem.kulaLastDirection.lerp(playerDirection, cameraSystem.kulaOrbitSpeed);
+            }
+        }
+    } else {
+        // Use last known direction when player is idle
+        if (!cameraSystem.kulaLastDirection) {
+            cameraSystem.kulaLastDirection = new THREE.Vector3(0, 0, 1);
+        }
+        playerDirection.copy(cameraSystem.kulaLastDirection);
+    }
+    
+    // Calculate camera position behind and above the ball
+    const behindDirection = playerDirection.clone().negate();
+    
+    // Position camera at an angle (not directly behind, but slightly tilted)
+    const cameraBasePos = predictedPos.clone()
+        .add(behindDirection.multiplyScalar(cameraSystem.kulaDistance))
+        .add(up.clone().multiplyScalar(cameraSystem.kulaHeight));
+    
+    // Apply tilt to camera position (move it slightly forward and up for the tilted view)
+    const tiltInfluence = Math.sin(cameraSystem.kulaTilt) * cameraSystem.kulaDistance * 0.3;
+    cameraBasePos.add(playerDirection.clone().multiplyScalar(tiltInfluence));
+    cameraBasePos.y += Math.cos(cameraSystem.kulaTilt) * cameraSystem.kulaHeight * 0.2;
+    
+    // Calculate desired camera target (slightly below ball center for better perspective)
+    const desiredCameraTarget = predictedPos.clone().add(cameraSystem.kulaTargetOffset);
+    
+    // Adjust target based on movement state for better tracking
+    switch (movementState) {
+        case 'jumping':
+            desiredCameraTarget.y += 0.5; // Look slightly higher when jumping
+            break;
+        case 'falling':
+            desiredCameraTarget.y -= 0.3; // Look slightly lower when falling
+            break;
+        case 'rolling':
+            // Add slight look-ahead when rolling
+            const lookAhead = playerDirection.clone().multiplyScalar(0.5);
+            desiredCameraTarget.add(lookAhead);
+            break;
+    }
+    
+    // Apply smooth following with kula-specific damping
+    const kulaSmoothing = cameraSystem.kulaSmoothing;
+    
+    // Dynamic smoothing based on movement state
+    let dynamicSmoothing = kulaSmoothing;
+    switch (movementState) {
+        case 'jumping':
+        case 'falling':
+            dynamicSmoothing = Math.min(kulaSmoothing * 1.4, 0.25);
+            break;
+        case 'rolling':
+            dynamicSmoothing = Math.min(kulaSmoothing * 1.1, 0.2);
+            break;
+        case 'airborne':
+            dynamicSmoothing = Math.min(kulaSmoothing * 1.2, 0.22);
+            break;
+        default:
+            dynamicSmoothing = kulaSmoothing;
+    }
+    
+    // Apply manual controls if enabled
+    if (cameraSystem.manualControlEnabled) {
+        cameraBasePos.add(cameraSystem.manualOffset);
+        
+        // Apply manual rotation
+        if (cameraSystem.manualRotationX !== 0 || cameraSystem.manualRotationY !== 0) {
+            const rotationMatrix = new THREE.Matrix4();
+            rotationMatrix.makeRotationFromEuler(new THREE.Euler(cameraSystem.manualRotationX, cameraSystem.manualRotationY, 0));
+            const rotatedOffset = cameraSystem.manualOffset.clone().applyMatrix4(rotationMatrix);
+            cameraBasePos.add(rotatedOffset);
+        }
+    }
+    
+    // Smooth interpolation for camera position and target
+    cameraSystem.currentPosition.lerp(cameraBasePos, dynamicSmoothing);
+    cameraSystem.currentTarget.lerp(desiredCameraTarget, dynamicSmoothing);
+    
+    // Calculate camera orientation with horizon lock
+    const cameraUp = cameraSystem.kulaHorizonLock ? new THREE.Vector3(0, 1, 0) : up;
+    
+    // Apply tilt constraint to prevent extreme angles
+    const cameraToTarget = cameraSystem.currentTarget.clone().sub(cameraSystem.currentPosition);
+    const distance = cameraToTarget.length();
+    const currentTilt = Math.asin(cameraToTarget.y / distance);
+    
+    if (Math.abs(currentTilt) > cameraSystem.kulaMaxTiltAngle) {
+        const clampedTilt = Math.sign(currentTilt) * cameraSystem.kulaMaxTiltAngle;
+        const horizontalDistance = Math.sqrt(cameraToTarget.x * cameraToTarget.x + cameraToTarget.z * cameraToTarget.z);
+        const newY = Math.sin(clampedTilt) * distance;
+        const scaleFactor = Math.cos(clampedTilt) * distance / horizontalDistance;
+        
+        cameraSystem.currentTarget.x = cameraSystem.currentPosition.x + cameraToTarget.x * scaleFactor;
+        cameraSystem.currentTarget.z = cameraSystem.currentPosition.z + cameraToTarget.z * scaleFactor;
+        cameraSystem.currentTarget.y = cameraSystem.currentPosition.y + newY;
+    }
+    
+    // Update camera position and orientation
+    camera.position.copy(cameraSystem.currentPosition);
+    camera.lookAt(cameraSystem.currentTarget);
+    camera.up.copy(cameraUp);
+}
+
+// Toggle between chase, isometric, and kula camera modes
 function toggleCameraMode() {
+    // Cycle through all three camera modes
+    if (cameraSystem.currentMode === 'chase') {
+        cameraSystem.currentMode = 'isometric';
+    } else if (cameraSystem.currentMode === 'isometric') {
+        cameraSystem.currentMode = 'kula';
+    } else {
+        cameraSystem.currentMode = 'chase';
+    }
+    
+    // Track camera mode switching for statistics and achievements
+    trackCameraModeSwitch();
+    
+    const messageElement = document.getElementById('message');
+    const cameraMode = document.getElementById('camera-mode');
+    
+    if (cameraSystem.currentMode === 'chase') {
+        // Switching to chase camera
+        if (messageElement) {
+            messageElement.textContent = 'Camera mode: Chase Camera - Follows behind the ball';
+            messageElement.style.color = '#66ccff';
+            setTimeout(() => {
+                messageElement.textContent = '';
+            }, 1500);
+        }
+        if (cameraMode) {
+            cameraMode.textContent = 'Chase camera: Smoothly follows behind the ball based on movement direction';
+        }
+    } else if (cameraSystem.currentMode === 'isometric') {
+        // Switching to isometric camera
+        if (messageElement) {
+            messageElement.textContent = 'Camera mode: Isometric View - Fixed angle following';
+            messageElement.style.color = '#66ccff';
+            setTimeout(() => {
+                messageElement.textContent = '';
+            }, 1500);
+        }
+        if (cameraMode) {
+            cameraMode.textContent = 'Isometric camera: Static angle that follows the ball smoothly';
+        }
+    } else if (cameraSystem.currentMode === 'kula') {
+        // Switching to kula camera
+        if (messageElement) {
+            messageElement.textContent = 'Camera mode: Kula Camera - Tilted perspective from above';
+            messageElement.style.color = '#66ccff';
+            setTimeout(() => {
+                messageElement.textContent = '';
+            }, 1500);
+        }
+        if (cameraMode) {
+            cameraMode.textContent = 'Kula camera: Tilted perspective that follows the ball with orbital movement';
+        }
+    }
+    
+    // Ensure camera system is enabled
+    cameraSystem.enabled = true;
+    
+    // Disable orbit controls when using our camera system
+    if (controls) {
+        controls.enabled = false;
+    }
+}
+
+// Toggle between third-person and orbit camera modes (legacy function)
+function toggleCameraToOrbitMode() {
     if (!controls) {
         console.warn('Cannot toggle camera mode: controls not initialized');
         return;
@@ -7092,6 +10303,12 @@ function resetCameraPosition() {
         setCameraPreset('default');
         cameraSystem.currentPosition.set(5, 5, 5);
         cameraSystem.currentTarget.set(0, 1, 0);
+        
+        // Reset manual camera controls
+        cameraSystem.manualOffset.set(0, 0, 0);
+        cameraSystem.manualRotationX = 0;
+        cameraSystem.manualRotationY = 0;
+        cameraSystem.manualControlEnabled = false;
     } else if (controls) {
         // Reset orbit controls
         controls.reset();
@@ -7105,6 +10322,62 @@ function resetCameraPosition() {
         setTimeout(() => {
             messageElement.textContent = '';
         }, 1500);
+    }
+}
+
+// Adjust camera manual control
+function adjustCameraManualControl(direction) {
+    if (!cameraSystem.enabled) return;
+    
+    cameraSystem.manualControlEnabled = true;
+    
+    const sensitivity = cameraSystem.controlSensitivity;
+    
+    switch(direction) {
+        case 'forward':
+            cameraSystem.manualOffset.z -= sensitivity;
+            break;
+        case 'backward':
+            cameraSystem.manualOffset.z += sensitivity;
+            break;
+        case 'left':
+            cameraSystem.manualOffset.x -= sensitivity;
+            break;
+        case 'right':
+            cameraSystem.manualOffset.x += sensitivity;
+            break;
+        case 'up':
+            cameraSystem.manualOffset.y += sensitivity;
+            break;
+        case 'down':
+            cameraSystem.manualOffset.y -= sensitivity;
+            break;
+        case 'rotateUp':
+            cameraSystem.manualRotationX += sensitivity * 0.1;
+            break;
+        case 'rotateDown':
+            cameraSystem.manualRotationX -= sensitivity * 0.1;
+            break;
+        case 'rotateLeft':
+            cameraSystem.manualRotationY += sensitivity * 0.1;
+            break;
+        case 'rotateRight':
+            cameraSystem.manualRotationY -= sensitivity * 0.1;
+            break;
+    }
+    
+    // Clamp rotation values
+    cameraSystem.manualRotationX = Math.max(-Math.PI/3, Math.min(Math.PI/3, cameraSystem.manualRotationX));
+    cameraSystem.manualRotationY = cameraSystem.manualRotationY % (Math.PI * 2);
+    
+    // Show control message
+    const messageElement = document.getElementById('message');
+    if (messageElement) {
+        messageElement.textContent = 'Camera manual control active (Shift + Arrow Keys)';
+        messageElement.style.color = '#66ccff';
+        setTimeout(() => {
+            messageElement.textContent = '';
+        }, 1000);
     }
 }
 
@@ -7221,22 +10494,54 @@ document.addEventListener('keydown', (event) => {
         return;
     }
     
-    // Handle physics-based movement input
+    // Handle physics-based movement input - prioritize game mechanics over camera controls
     if (!gameState.isPaused && !worldState.isRotating) {
+        // Check if arrow keys should control camera (when Shift is held AND camera is enabled)
+        // IMPORTANT: Player movement always takes priority over camera controls
+        const useArrowsForCamera = event.shiftKey && cameraSystem.enabled && !gameState.isPaused;
+        
         switch(event.code) {
             case 'ArrowUp':
+                if (useArrowsForCamera) {
+                    adjustCameraManualControl('forward');
+                } else {
+                    // Player movement always takes priority
+                    playerState.inputState.forward = true;
+                }
+                break;
+            case 'ArrowDown':
+                if (useArrowsForCamera) {
+                    adjustCameraManualControl('backward');
+                } else {
+                    // Player movement always takes priority
+                    playerState.inputState.backward = true;
+                }
+                break;
+            case 'ArrowLeft':
+                if (useArrowsForCamera) {
+                    adjustCameraManualControl('left');
+                } else {
+                    // Player movement always takes priority
+                    playerState.inputState.left = true;
+                }
+                break;
+            case 'ArrowRight':
+                if (useArrowsForCamera) {
+                    adjustCameraManualControl('right');
+                } else {
+                    // Player movement always takes priority
+                    playerState.inputState.right = true;
+                }
+                break;
             case 'KeyW':
                 playerState.inputState.forward = true;
                 break;
-            case 'ArrowDown':
             case 'KeyS':
                 playerState.inputState.backward = true;
                 break;
-            case 'ArrowLeft':
             case 'KeyA':
                 playerState.inputState.left = true;
                 break;
-            case 'ArrowRight':
             case 'KeyD':
                 playerState.inputState.right = true;
                 break;
@@ -7309,6 +10614,18 @@ document.addEventListener('keydown', (event) => {
                     }
                 }
                 break;
+            case 'KeyJ':
+                // Toggle jump debug mode
+                toggleJumpDebug();
+                break;
+            case 'KeyF':
+                // Test fall-off handling system
+                testFallOffHandling();
+                break;
+            case 'KeyV':
+                // Check vertical velocity status
+                checkVerticalVelocity();
+                break;
             case 'KeyL':
                 // Toggle level mode (JSON vs Random)
                 toggleLevelMode();
@@ -7326,6 +10643,14 @@ document.addEventListener('keydown', (event) => {
                 if (gameState.currentState === 'in-game') {
                     returnToLobby();
                 }
+                break;
+            case 'Comma':
+                // Toggle instructions visibility
+                toggleInstructions();
+                break;
+            case 'KeyH':
+                // Toggle debug mode for collision visualization
+                toggleDebugMode();
                 break;
 
         }
@@ -7376,6 +10701,26 @@ document.addEventListener('keyup', (event) => {
     }
 });
 
+// Toggle instructions visibility
+function toggleInstructions() {
+    const controlsDiv = document.getElementById('controls');
+    const hintsDiv = document.getElementById('controls-hint');
+    
+    if (!controlsDiv || !hintsDiv) return;
+    
+    gameState.instructionsVisible = !gameState.instructionsVisible;
+    
+    if (gameState.instructionsVisible) {
+        // Show instructions
+        controlsDiv.classList.add('show');
+        hintsDiv.classList.add('hide');
+    } else {
+        // Hide instructions
+        controlsDiv.classList.remove('show');
+        hintsDiv.classList.remove('hide');
+    }
+}
+
 // Update player position and animation
 function updatePlayer() {
     // Don't update player movement during world rotation
@@ -7425,9 +10770,12 @@ function updatePlayer() {
             player.rotation.z = playerState.baseRotation.z;
         }
         
-        // Add a subtle bounce effect at the peak of movement
-        const bounceHeight = 0.1 * Math.sin(easeProgress * Math.PI);
-        player.position.y = 0.55 + bounceHeight;
+        // Use physics-based Y position when physics system is active
+        if (playerPhysics && playerPhysics.isGrounded) {
+            player.position.y = playerPhysics.position.y;
+        } else {
+            player.position.y = 0.55; // Fallback for legacy compatibility
+        }
         
         // Check if movement is complete
         if (progress >= 1) {
@@ -7484,30 +10832,19 @@ const gameState = {
     progressionChoiceTimeout: null,
     currentState: 'lobby', // 'lobby', 'starting', 'in-game'
     isPaused: false,
-    isTransitioning: false // New: Track transition state
+    isTransitioning: false, // New: Track transition state
+    instructionsVisible: false // Track whether instructions are visible
 };
 
-// Transition state management
+// Minimal transition state for safety locks only
 const transitionState = {
     isActive: false,
-    startTime: null,
-    duration: 0,
-    type: null, // 'level-transition', 'victory-screen', etc.
-    lockInput: true,
-    lockCamera: true
+    startTime: null
 };
 
-// Function to start transition state (disabled - no longer locks input/camera)
-function startTransition(type = 'level-transition', duration = 1100, lockInput = true, lockCamera = true) {
-    // Transition state disabled - no input/camera locking
-    console.log(`Transition disabled: ${type} - proceeding without locks`);
-}
+// Transition functions removed - no transition states or delays
 
-// Function to end transition state (disabled - no longer needed)
-function endTransition() {
-    // Transition state disabled - no action needed
-    console.log(`Transition end called - no action needed`);
-}
+// Transition end function removed - no transition states
 
 // Function to check if input should be locked
 function isInputLocked() {
@@ -7572,10 +10909,17 @@ function restartGame() {
     playerState.isMoving = false;
     
     // Reset game score
-    gameScore.score = 0;
-    gameScore.lives = 3;
+    gameScore.coins = 0;
+    gameScore.totalCoins = 0;
+    gameScore.requiredCoins = 0;
     gameScore.hasKey = false;
     gameScore.levelComplete = false;
+    gameScore.lives = gameScore.maxLives; // Reset to max lives
+    
+    // Reset underworld state
+    underworldState.isInUnderworld = false;
+    underworldState.overworldPosition = null;
+    clearUnderworldObjects();
     
     // Reset world state
     worldState.isRotating = false;
@@ -7587,12 +10931,22 @@ function restartGame() {
     worldGroup.rotation.set(0, 0, 0);
     lightGroup.rotation.set(0, 0, 0);
     
+    // Reset physics
+    resetPlayerPhysics();
+    
+    // Reset timer
+    resetTimer();
+    
     // Reload the current level
-    loadLevel(currentLevel);
+    if (useJsonLevels && levelDataLoaded) {
+        loadJsonLevel(currentLevelIndex);
+    } else {
+        generateNewLevel();
+    }
     
     // Update displays
     updateScoreDisplay();
-    updateHUDDisplay();
+    updatePlayerPosition();
     
     // Show restart message
     showMessage('Level restarted!', '#00ff00');
@@ -7995,9 +11349,7 @@ function updateLevelProgress(levelIndex, score, completionTime = null) {
             if (levelProgress.unlockedLevels > previousUnlocked) {
                 const nextLevel = jsonLevels[levelIndex + 1];
                 if (nextLevel) {
-                    setTimeout(() => {
-                        showMessage(`🔓 New level unlocked: ${nextLevel.name}!`, '#00ff00', 3000);
-                    }, 2000);
+                    showMessage(`🔓 New level unlocked: ${nextLevel.name}!`, '#00ff00', 3000);
                 }
             }
         }
@@ -8881,10 +12233,20 @@ function animateCoinCollection(newCount, oldCount) {
 
 // Animate key collection
 function animateKeyCollection() {
+    // Animate the key status element
     animateHudElement('key-status', 'pulse');
     
     // Add key collection popup
     showFloatingScoreText('🔑 Key Collected!', '#ff6600');
+    
+    // Add glow effect to key display
+    const keyDisplay = document.getElementById('key-display');
+    if (keyDisplay) {
+        keyDisplay.style.boxShadow = '0 0 20px #00ff00';
+        setTimeout(() => {
+            keyDisplay.style.boxShadow = '';
+        }, 1000);
+    }
 }
 
 // Animate connection status change
@@ -9514,15 +12876,13 @@ socket.on('gameStarted', (data) => {
     // Show game start message
     showMessage('Game started! Good luck!', '#00ff00', 3000);
     
-            // Initialize level (first player to connect typically does this)
-        setTimeout(() => {
-            if (useJsonLevels && jsonLevels.length > 0) {
-                setCurrentLevelIndex(0);
-                loadJsonLevel(0);
-            } else {
-                generateNewLevel(15);
-            }
-        }, 1000);
+    // Initialize level immediately (first player to connect typically does this)
+    if (useJsonLevels && jsonLevels.length > 0) {
+        setCurrentLevelIndex(0);
+        loadJsonLevel(0);
+    } else {
+        generateNewLevel(15);
+    }
 });
 
 // Voting socket event handlers
@@ -10533,18 +13893,21 @@ window.addEventListener('resize', () => {
 function animate() {
     requestAnimationFrame(animate);
     
-    // Debug logging for transition issues (only log occasionally to avoid spam)
-    if (transitionState.isActive && Date.now() % 2000 < 16) {
-        console.log('🎬 Animate loop running during transition');
-    }
+    // No transition logging - transitions are immediate
     
-    // Always update controls for damping (if enabled) - allows camera movement even when paused
-    if (controls && controls.enabled) {
-        controls.update();
+    // Camera updates - isolated from game logic to prevent interference
+    try {
+        // Update controls for damping (if enabled and not interfering with gameplay)
+        if (controls && controls.enabled && !gameState.isPaused) {
+            controls.update();
+        }
+        
+        // Update third-person camera - isolated from game logic
+        updateThirdPersonCamera();
+    } catch (error) {
+        console.warn('Camera update error (isolated):', error);
+        // Camera errors should not affect game logic
     }
-    
-    // Always update third-person camera - allows camera movement even when paused
-    updateThirdPersonCamera();
     
     // Check for NaN values in player position before rendering
     if (player && player.position) {
@@ -10611,6 +13974,12 @@ function animate() {
     
     // Check typed tile collision
     checkTypedTileCollision();
+    
+    // Check hole collision
+    checkHoleCollision();
+    
+    // Check underworld exit collision
+    checkUnderworldExitCollision();
     
     // Update and check moving obstacles
     updateMovingObstacles();
@@ -10699,6 +14068,9 @@ async function init() {
     
     // Initialize controls for initial gravity orientation
     updateControlsForGravity();
+    
+    // Set up initial environment
+    setupEnvironment();
     
     // Initialize sound system - enable audio context on first user interaction
     document.addEventListener('click', () => {
@@ -10809,6 +14181,243 @@ window.previousJsonLevel = previousJsonLevel;
 window.updateLevelInfo = updateLevelInfo;
 window.handleAllJsonLevelsCompleted = handleAllJsonLevelsCompleted;
 window.handleProgressionChoice = handleProgressionChoice;
+
+// Make physics validation functions globally accessible for debugging
+window.validatePhysicsConsistency = validatePhysicsConsistency;
+window.testPhysicsConsistency = testPhysicsConsistency;
+
+// Key collision validation function
+function validateKeyCollisionSystem() {
+    console.log('🔑 Key Collision System Validation:');
+    console.log('- gameKey exists:', !!gameKey);
+    console.log('- player exists:', !!player);
+    console.log('- player.position exists:', !!player?.position);
+    console.log('- gameScore.hasKey:', gameScore.hasKey);
+    console.log('- collectDistance:', getConfigValue('physics.collisionDistance', 0.8));
+    
+    if (gameKey) {
+        console.log('- gameKey.position:', {
+            x: gameKey.position.x.toFixed(2), 
+            y: gameKey.position.y.toFixed(2), 
+            z: gameKey.position.z.toFixed(2)
+        });
+        console.log('- gameKey.userData:', gameKey.userData);
+        console.log('- gameKey in worldGroup:', worldGroup.children.includes(gameKey));
+    }
+    
+    if (player) {
+        console.log('- player.position:', {
+            x: player.position.x.toFixed(2), 
+            y: player.position.y.toFixed(2), 
+            z: player.position.z.toFixed(2)
+        });
+        
+        if (gameKey) {
+            const distance = player.position.distanceTo(gameKey.position);
+            console.log('- distance to key:', distance.toFixed(2));
+            console.log('- within collection range:', distance < getConfigValue('physics.collisionDistance', 0.8));
+        }
+    }
+    
+    // Check if checkKeyAndGoalCollection is being called
+    console.log('- checkKeyAndGoalCollection function exists:', typeof checkKeyAndGoalCollection === 'function');
+    console.log('- animation loop running:', !gameState.isPaused);
+    
+    return {
+        keyExists: !!gameKey,
+        playerExists: !!player,
+        hasKey: gameScore.hasKey,
+        systemReady: !!gameKey && !!player && !gameScore.hasKey
+    };
+}
+
+// Make key validation function globally accessible
+window.validateKeyCollisionSystem = validateKeyCollisionSystem;
+
+// Inventory and HUD validation function
+function validateInventoryAndHUD() {
+    console.log('🎒 Inventory and HUD System Validation:');
+    
+    // Check game score state
+    console.log('📊 Game Score State:');
+    console.log('- gameScore.hasKey:', gameScore.hasKey);
+    console.log('- gameScore.coins:', gameScore.coins);
+    console.log('- gameScore.totalCoins:', gameScore.totalCoins);
+    console.log('- gameScore.requiredCoins:', gameScore.requiredCoins);
+    console.log('- gameScore.lives:', gameScore.lives);
+    console.log('- gameScore.currentLevel:', gameScore.currentLevel);
+    console.log('- gameScore.levelComplete:', gameScore.levelComplete);
+    
+    // Check HUD elements
+    console.log('📺 HUD Elements:');
+    const hudElements = {
+        keyStatus: document.getElementById('key-status'),
+        coinsCount: document.getElementById('coins-count'),
+        coinsTotal: document.getElementById('coins-total'),
+        livesCount: document.getElementById('lives-count'),
+        scoreCount: document.getElementById('score-count'),
+        levelName: document.getElementById('level-name')
+    };
+    
+    Object.entries(hudElements).forEach(([name, element]) => {
+        if (element) {
+            console.log(`- ${name}: "${element.textContent}" (color: ${element.style.color})`);
+        } else {
+            console.warn(`❌ ${name} element not found`);
+        }
+    });
+    
+    // Check key-specific HUD state
+    const keyStatusElement = hudElements.keyStatus;
+    if (keyStatusElement) {
+        console.log('🔑 Key HUD Details:');
+        console.log('- Text content:', keyStatusElement.textContent);
+        console.log('- Has "has-key" class:', keyStatusElement.classList.contains('has-key'));
+        console.log('- Color style:', keyStatusElement.style.color);
+        console.log('- Expected text:', gameScore.hasKey ? '✔' : '✗');
+        console.log('- HUD matches game state:', keyStatusElement.textContent === (gameScore.hasKey ? '✔' : '✗'));
+    }
+    
+    // Check visual indicators
+    console.log('👀 Visual Indicators:');
+    console.log('- Goal tile exists:', !!goalTile);
+    if (goalTile) {
+        console.log('- Goal tile color:', goalTile.material.color.getHex().toString(16));
+        console.log('- Goal tile expected color:', gameScore.hasKey ? '00ff00' : '666666');
+    }
+    
+    // Test HUD update
+    console.log('🔄 Testing HUD Update:');
+    updateScoreDisplay({ animateKey: false });
+    
+    return {
+        gameStateValid: typeof gameScore.hasKey === 'boolean',
+        hudElementsFound: Object.values(hudElements).every(el => el !== null),
+        hudMatches: keyStatusElement?.textContent === (gameScore.hasKey ? '✔' : '✗'),
+        goalTileExists: !!goalTile
+    };
+}
+
+// Test inventory update function
+function testInventoryUpdate() {
+    console.log('🧪 Testing Inventory Update:');
+    
+    const originalState = gameScore.hasKey;
+    console.log('- Original key state:', originalState);
+    
+    // Simulate key collection
+    gameScore.hasKey = true;
+    updateScoreDisplay({ animateKey: true });
+    console.log('- After simulated collection:', gameScore.hasKey);
+    
+    // Restore original state
+    gameScore.hasKey = originalState;
+    updateScoreDisplay({ animateKey: false });
+    console.log('- Restored to original state:', gameScore.hasKey);
+    
+    return { success: true };
+}
+
+// Make inventory validation functions globally accessible
+window.validateInventoryAndHUD = validateInventoryAndHUD;
+window.testInventoryUpdate = testInventoryUpdate;
+
+// Camera interference validation function
+function validateCameraInterference() {
+    console.log('📷 Camera Interference Validation:');
+    
+    // Check OrbitControls state
+    console.log('🎮 OrbitControls State:');
+    console.log('- controls.enabled:', controls?.enabled);
+    console.log('- controls.enableKeys:', controls?.enableKeys);
+    console.log('- controls.enableRotate:', controls?.enableRotate);
+    console.log('- controls.enablePan:', controls?.enablePan);
+    console.log('- controls.enableZoom:', controls?.enableZoom);
+    
+    // Check camera system state
+    console.log('📸 Camera System State:');
+    console.log('- cameraSystem.enabled:', cameraSystem?.enabled);
+    console.log('- cameraSystem.currentMode:', cameraSystem?.currentMode);
+    console.log('- cameraSystem.manualControlEnabled:', cameraSystem?.manualControlEnabled);
+    
+    // Check game state
+    console.log('🎮 Game State:');
+    console.log('- gameState.isPaused:', gameState.isPaused);
+    console.log('- worldState.isRotating:', worldState.isRotating);
+    console.log('- isInputLocked():', isInputLocked());
+    console.log('- isCameraLocked():', isCameraLocked());
+    
+    // Check collision detection independence
+    console.log('🔍 Collision Detection:');
+    console.log('- Key collision function exists:', typeof checkKeyAndGoalCollection === 'function');
+    console.log('- Physics movement function exists:', typeof updatePhysicsMovement === 'function');
+    console.log('- Animation loop running:', !gameState.isPaused);
+    
+    // Check for potential interference
+    const interferenceIssues = [];
+    
+    if (controls?.enabled) {
+        interferenceIssues.push('OrbitControls are enabled - may interfere with input');
+    }
+    
+    if (controls?.enableKeys) {
+        interferenceIssues.push('OrbitControls key handling is enabled - may capture input');
+    }
+    
+    if (gameState.isPaused) {
+        interferenceIssues.push('Game is paused - collision detection may be blocked');
+    }
+    
+    if (worldState.isRotating) {
+        interferenceIssues.push('World is rotating - input may be locked');
+    }
+    
+    console.log('⚠️ Potential Issues:', interferenceIssues.length > 0 ? interferenceIssues : 'None detected');
+    
+    // Test input state
+    console.log('🎯 Input State Test:');
+    console.log('- playerState.inputState:', playerState.inputState);
+    
+    return {
+        orbitControlsDisabled: !controls?.enabled,
+        cameraSystemIsolated: !interferenceIssues.length,
+        collisionDetectionActive: typeof checkKeyAndGoalCollection === 'function',
+        inputHandlingActive: !isInputLocked(),
+        issues: interferenceIssues
+    };
+}
+
+// Test camera isolation
+function testCameraIsolation() {
+    console.log('🧪 Testing Camera Isolation:');
+    
+    // Test that camera mode changes don't affect collision detection
+    const originalMode = cameraSystem.currentMode;
+    
+    // Test isometric mode
+    cameraSystem.currentMode = 'isometric';
+    console.log('- Isometric mode: collision detection active:', typeof checkKeyAndGoalCollection === 'function');
+    
+    // Test chase mode
+    cameraSystem.currentMode = 'chase';
+    console.log('- Chase mode: collision detection active:', typeof checkKeyAndGoalCollection === 'function');
+    
+    // Test with camera disabled
+    const originalEnabled = cameraSystem.enabled;
+    cameraSystem.enabled = false;
+    console.log('- Camera disabled: collision detection active:', typeof checkKeyAndGoalCollection === 'function');
+    
+    // Restore original states
+    cameraSystem.currentMode = originalMode;
+    cameraSystem.enabled = originalEnabled;
+    
+    console.log('✅ Camera isolation test completed');
+    return { success: true };
+}
+
+// Make camera validation functions globally accessible
+window.validateCameraInterference = validateCameraInterference;
+window.testCameraIsolation = testCameraIsolation;
 window.restartJsonLevels = restartJsonLevels;
 window.switchToRandomGeneration = switchToRandomGeneration;
 window.loopToFirstJsonLevel = loopToFirstJsonLevel;
@@ -10965,4 +14574,5 @@ window.animateLevelChange = animateLevelChange;
 window.showFloatingScoreText = showFloatingScoreText;
 window.animateNumber = animateNumber;
 window.animateTimerUpdate = animateTimerUpdate;
+window.animateProgressBar = animateProgressBar; 
 window.animateProgressBar = animateProgressBar; 

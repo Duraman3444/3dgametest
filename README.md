@@ -148,6 +148,9 @@ Level structure:
     "gridSize": 10,
     "playerStart": { "x": 5, "z": 5 },
     "tiles": "auto",
+    "hasInvertedWorld": true,
+    "use3D": true,
+    "hasUnderworld": false,
     "objects": [
         { "type": "coin", "x": 3, "z": 3 },
         { "type": "key", "x": 7, "z": 7 },
@@ -178,7 +181,7 @@ Level structure:
 ### Player Movement
 - **Arrow Keys / WASD**: Free-directional physics-based movement with acceleration, friction, and momentum
 - **Movement**: Real-time 3D physics using Three.js for realistic ball rolling (Kula World style)
-- **Jump Mechanics**: Spacebar applies upward force for jumping between platforms
+- **Jump Mechanics**: Spacebar applies upward force for jumping between platforms (only when grounded)
 - **Physics Simulation**: Custom gravity, collision detection, and momentum-based movement
 - **Advanced Levels**: Floating platforms, slopes, curves, and 3D puzzle mechanics
 - **Camera**: Predictive following with velocity-based smoothness adjustments
@@ -187,6 +190,13 @@ Level structure:
 - **Level Goal**: Collect key, then reach the goal tile to complete the level
 - **Spike Avoidance**: Avoid red spike traps that cause damage and respawn
 - **Teleport Usage**: Walk onto purple teleport tiles for instant transportation to linked destination
+
+### Fall-Off Handling
+- **Basic Levels (1-5)**: Falling off the map restarts the current level
+- **Advanced Levels (6+)**: Falling off the map transitions to the inverted world
+- **3D Levels**: Levels with `use3D: true` support inverted world transitions
+- **Underworld Levels**: Levels with `hasUnderworld: true` support inverted world transitions
+- **Explicit Control**: Levels can set `hasInvertedWorld: true/false` to override default behavior
 
 ### Automatic Surface Detection
 - **Natural Navigation**: Walk into any wall to automatically transition to that surface
