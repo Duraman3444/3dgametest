@@ -53,8 +53,8 @@
             { "type": "spikeTrap", "x": 8, "z": 8 },
             { "type": "spikeTrap", "x": 9, "z": 4 },
             { "type": "spikeTrap", "x": 4, "z": 9 },
-            { "type": "key", "x": 11, "z": 5 },
-            { "type": "goal", "x": 12, "z": 7 }
+            { "type": "key", "x": 2, "z": 7 },
+            { "type": "goal", "x": 11, "z": 10 }
         ]
     },
     {
