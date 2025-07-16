@@ -2769,43 +2769,83 @@ function checkTeleportTileCollision() {
 }
 
 // Create floor tiles with configurable size
-let tileSize, gridSize;
+let tileSize = 2; // Default fallback value
+let gridSize = 10; // Default fallback value
+let tileGeometry;
 const floorTiles = [];
 
 // Initialize tile and grid settings from config
 function initializeTileSettings() {
-    tileSize = getConfigValue('gameplay.tileSize', 2);
-    gridSize = getConfigValue('gameplay.gridSize', 10);
+    const newTileSize = getConfigValue('gameplay.tileSize', 2);
+    const newGridSize = getConfigValue('gameplay.gridSize', 10);
+    
+    // Validate values are numbers and positive
+    if (typeof newTileSize === 'number' && newTileSize > 0 && !isNaN(newTileSize)) {
+        tileSize = newTileSize;
+    } else {
+        console.warn('Invalid tileSize value, using default:', tileSize);
+    }
+    
+    if (typeof newGridSize === 'number' && newGridSize > 0 && !isNaN(newGridSize)) {
+        gridSize = newGridSize;
+    } else {
+        console.warn('Invalid gridSize value, using default:', gridSize);
+    }
+    
+    // Create tile geometry after values are validated
+    tileGeometry = new THREE.BoxGeometry(tileSize, 0.1, tileSize);
+    
+    // Generate tiles after settings are initialized
+    generateFloorTiles();
+    
+    // Generate boundary walls after settings are initialized
+    generateBoundaryWalls();
 }
 
 // Create materials for checkerboard pattern
 const lightTileMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
 const darkTileMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
 
-// Create tile geometry (thin boxes)
-const tileGeometry = new THREE.BoxGeometry(tileSize, 0.1, tileSize);
-
 // Generate the grid of tiles
-for (let i = 0; i < gridSize; i++) {
-    for (let j = 0; j < gridSize; j++) {
-        // Determine tile color using checkerboard pattern
-        const isLight = (i + j) % 2 === 0;
-        const material = isLight ? lightTileMaterial : darkTileMaterial;
-        
-        // Create tile
-        const tile = new THREE.Mesh(tileGeometry, material);
-        
-        // Position tile in grid
-        const x = (i - gridSize / 2 + 0.5) * tileSize;
-        const z = (j - gridSize / 2 + 0.5) * tileSize;
-        tile.position.set(x, 0, z);
-        
-        // Enable shadow receiving
-        tile.receiveShadow = true;
-        
-        // Add to world group and store reference
-        worldGroup.add(tile);
-        floorTiles.push(tile);
+function generateFloorTiles() {
+    // Clear existing tiles
+    floorTiles.forEach(tile => worldGroup.remove(tile));
+    floorTiles.length = 0;
+    
+    // Validate that tileSize and gridSize are valid numbers
+    if (!tileSize || !gridSize || isNaN(tileSize) || isNaN(gridSize)) {
+        console.error('Cannot generate floor tiles: invalid tileSize or gridSize values');
+        return;
+    }
+    
+    for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+            // Determine tile color using checkerboard pattern
+            const isLight = (i + j) % 2 === 0;
+            const material = isLight ? lightTileMaterial : darkTileMaterial;
+            
+            // Create tile
+            const tile = new THREE.Mesh(tileGeometry, material);
+            
+            // Position tile in grid with validation
+            const x = (i - gridSize / 2 + 0.5) * tileSize;
+            const z = (j - gridSize / 2 + 0.5) * tileSize;
+            
+            // Validate position values
+            if (isNaN(x) || isNaN(z)) {
+                console.error('Invalid tile position calculated:', { x, z, i, j, tileSize, gridSize });
+                continue;
+            }
+            
+            tile.position.set(x, 0, z);
+            
+            // Enable shadow receiving
+            tile.receiveShadow = true;
+            
+            // Add to world group and store reference
+            worldGroup.add(tile);
+            floorTiles.push(tile);
+        }
     }
 }
 
@@ -2816,46 +2856,66 @@ const boundaryMaterial = new THREE.MeshLambertMaterial({
     opacity: 0.8
 });
 
+// Boundary walls will be created after tile settings are initialized
+const boundaryWalls = [];
+
 // Create boundary walls
-const wallHeight = getConfigValue('visual.wallHeight', 0.5);
-const wallThickness = getConfigValue('visual.wallThickness', 0.1);
-const gridWorldSize = gridSize * tileSize;
+function generateBoundaryWalls() {
+    // Clear existing walls
+    boundaryWalls.forEach(wall => worldGroup.remove(wall));
+    boundaryWalls.length = 0;
+    
+    // Validate that tileSize and gridSize are valid
+    const validTileSize = validateNumber(tileSize, 2, 'tileSize');
+    const validGridSize = validateNumber(gridSize, 10, 'gridSize');
+    
+    const wallHeight = validateNumber(getConfigValue('visual.wallHeight', 0.5), 0.5, 'wallHeight');
+    const wallThickness = validateNumber(getConfigValue('visual.wallThickness', 0.1), 0.1, 'wallThickness');
+    const gridWorldSize = validGridSize * validTileSize;
+    
+    // Validate calculated values
+    const validGridWorldSize = validateNumber(gridWorldSize, 20, 'gridWorldSize');
+    
+    // North wall (negative Z)
+    const northWall = new THREE.Mesh(
+        new THREE.BoxGeometry(validGridWorldSize + wallThickness * 2, wallHeight, wallThickness),
+        boundaryMaterial
+    );
+    northWall.position.set(0, wallHeight / 2, -validGridWorldSize / 2 - wallThickness / 2);
+    northWall.receiveShadow = true;
+    worldGroup.add(northWall);
+    boundaryWalls.push(northWall);
 
-// North wall (negative Z)
-const northWall = new THREE.Mesh(
-    new THREE.BoxGeometry(gridWorldSize + wallThickness * 2, wallHeight, wallThickness),
-    boundaryMaterial
-);
-northWall.position.set(0, wallHeight / 2, -gridWorldSize / 2 - wallThickness / 2);
-northWall.receiveShadow = true;
-worldGroup.add(northWall);
+    // South wall (positive Z)
+    const southWall = new THREE.Mesh(
+        new THREE.BoxGeometry(validGridWorldSize + wallThickness * 2, wallHeight, wallThickness),
+        boundaryMaterial
+    );
+    southWall.position.set(0, wallHeight / 2, validGridWorldSize / 2 + wallThickness / 2);
+    southWall.receiveShadow = true;
+    worldGroup.add(southWall);
+    boundaryWalls.push(southWall);
 
-// South wall (positive Z)
-const southWall = new THREE.Mesh(
-    new THREE.BoxGeometry(gridWorldSize + wallThickness * 2, wallHeight, wallThickness),
-    boundaryMaterial
-);
-southWall.position.set(0, wallHeight / 2, gridWorldSize / 2 + wallThickness / 2);
-southWall.receiveShadow = true;
-worldGroup.add(southWall);
+    // West wall (negative X)
+    const westWall = new THREE.Mesh(
+        new THREE.BoxGeometry(wallThickness, wallHeight, validGridWorldSize),
+        boundaryMaterial
+    );
+    westWall.position.set(-validGridWorldSize / 2 - wallThickness / 2, wallHeight / 2, 0);
+    westWall.receiveShadow = true;
+    worldGroup.add(westWall);
+    boundaryWalls.push(westWall);
 
-// West wall (negative X)
-const westWall = new THREE.Mesh(
-    new THREE.BoxGeometry(wallThickness, wallHeight, gridWorldSize),
-    boundaryMaterial
-);
-westWall.position.set(-gridWorldSize / 2 - wallThickness / 2, wallHeight / 2, 0);
-westWall.receiveShadow = true;
-worldGroup.add(westWall);
-
-// East wall (positive X)
-const eastWall = new THREE.Mesh(
-    new THREE.BoxGeometry(wallThickness, wallHeight, gridWorldSize),
-    boundaryMaterial
-);
-eastWall.position.set(gridWorldSize / 2 + wallThickness / 2, wallHeight / 2, 0);
-eastWall.receiveShadow = true;
-worldGroup.add(eastWall);
+    // East wall (positive X)
+    const eastWall = new THREE.Mesh(
+        new THREE.BoxGeometry(wallThickness, wallHeight, validGridWorldSize),
+        boundaryMaterial
+    );
+    eastWall.position.set(validGridWorldSize / 2 + wallThickness / 2, wallHeight / 2, 0);
+    eastWall.receiveShadow = true;
+    worldGroup.add(eastWall);
+    boundaryWalls.push(eastWall);
+}
 
 // Third-person camera system
 let cameraSystem;
@@ -2987,11 +3047,33 @@ function initializeMovementSettings() {
     moveDuration = getConfigValue('gameplay.moveDuration', 0.3);
 }
 
+// Validate numeric values to prevent NaN
+function validateNumber(value, fallback = 0, name = 'value') {
+    if (typeof value === 'number' && !isNaN(value) && isFinite(value)) {
+        return value;
+    }
+    console.warn(`Invalid ${name}:`, value, 'using fallback:', fallback);
+    return fallback;
+}
+
 // Convert grid coordinates to world position
 function gridToWorld(gridX, gridZ) {
-    const x = (gridX - gridSize / 2 + 0.5) * tileSize;
-    const z = (gridZ - gridSize / 2 + 0.5) * tileSize;
-    return new THREE.Vector3(x, 0.55, z);
+    // Validate inputs
+    gridX = validateNumber(gridX, 0, 'gridX');
+    gridZ = validateNumber(gridZ, 0, 'gridZ');
+    
+    // Validate global variables
+    const validTileSize = validateNumber(tileSize, 2, 'tileSize');
+    const validGridSize = validateNumber(gridSize, 10, 'gridSize');
+    
+    const x = (gridX - validGridSize / 2 + 0.5) * validTileSize;
+    const z = (gridZ - validGridSize / 2 + 0.5) * validTileSize;
+    
+    // Final validation of calculated position
+    const validX = validateNumber(x, 0, 'calculated x');
+    const validZ = validateNumber(z, 0, 'calculated z');
+    
+    return new THREE.Vector3(validX, 0.55, validZ);
 }
 
 // Move player to grid position with animation
