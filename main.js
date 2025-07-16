@@ -2897,13 +2897,28 @@ function initializeCameraSystem() {
             }
         }
     };
+    
+    // Initialize original camera settings after cameraSystem is set up
+    initializeOriginalCameraSettings();
 }
 
 // Camera positioning is now handled in the init function
 
 // Store original camera settings for rotation calculations
-const originalCameraOffset = cameraSystem.presets.default.offset.clone();
-const originalCameraTarget = cameraSystem.presets.default.target.clone();
+let originalCameraOffset;
+let originalCameraTarget;
+
+// Initialize original camera settings safely
+function initializeOriginalCameraSettings() {
+    if (cameraSystem && cameraSystem.presets && cameraSystem.presets.default) {
+        originalCameraOffset = cameraSystem.presets.default.offset.clone();
+        originalCameraTarget = cameraSystem.presets.default.target.clone();
+    } else {
+        // Fallback to default values if cameraSystem is not initialized
+        originalCameraOffset = new THREE.Vector3(0, 4, 6);
+        originalCameraTarget = new THREE.Vector3(0, 1, 0);
+    }
+}
 
 // Optional: Keep OrbitControls for debugging (disabled by default)
 const controls = new OrbitControls(camera, renderer.domElement);
