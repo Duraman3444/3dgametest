@@ -10,49 +10,38 @@
     "bounceHeight": 4
   },
   "camera": {
-    "smoothness": 0.15,
+    "smoothness": 0.1,
     "fov": 75,
     "near": 0.1,
     "far": 1000,
     "defaultOffset": {
       "x": 0,
-      "y": 5,
-      "z": 7
+      "y": 4,
+      "z": 6
     },
     "defaultTarget": {
       "x": 0,
-      "y": 1.2,
+      "y": 1,
       "z": 0
-    },
-    "gravityTransitionSpeed": 0.3,
-    "jumpPredictionStrength": 0.8,
-    "fallPredictionStrength": 1.0,
-    "rollingPredictionStrength": 0.6
+    }
   },
   "physics": {
     "collisionDistance": 0.8,
     "teleportDistance": 0.7,
     "trapDistance": 0.6,
     "platformDistance": 0.5,
-    "gravity": -12.0,
+    "gravity": -9.82,
     "playerRadius": 0.5,
-    "groundFriction": 0.92,
-    "airFriction": 0.995,
-    "acceleration": 15,
-    "maxVelocity": 10,
-    "jumpForce": 8.5,
-    "bounceRestitution": 0.4,
-    "rollingFriction": 0.008,
-    "minBounceVelocity": 0.2,
-    "maxRollSpeed": 0.8,
-    "rollDamping": 0.98,
-    "coyoteTime": 0.15,
-    "jumpBufferTime": 0.1,
-    "fallMultiplier": 1.8,
-    "lowJumpMultiplier": 2.2,
-    "terminalVelocity": 15,
-    "momentumPreservation": 0.75,
-    "precisionThreshold": 0.05
+    "groundFriction": 0.85,
+    "airFriction": 0.98,
+    "acceleration": 12,
+    "maxVelocity": 8,
+    "jumpForce": 6,
+    "bounceRestitution": 0.6,
+    "rollingFriction": 0.02,
+    "minBounceVelocity": 0.1,
+    "maxRollSpeed": 0.5,
+    "rollDamping": 0.95
   },
   "visual": {
     "animationSpeed": 2,
